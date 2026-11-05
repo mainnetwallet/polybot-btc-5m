@@ -16,6 +16,8 @@ from .db.engine import backup_database, init_db, make_engine, make_session_facto
 from .db.repo import Repository
 from .security import hash_password
 
+MIN_PASSWORD_LENGTH = 4
+
 
 def _settings() -> Settings:
     return load_settings()
@@ -48,8 +50,8 @@ def cmd_hash_password(args: argparse.Namespace) -> int:
     if password != confirm:
         print("passwords do not match", file=sys.stderr)
         return 1
-    if len(password) < 12:
-        print("password must be at least 12 characters", file=sys.stderr)
+    if len(password) < MIN_PASSWORD_LENGTH:
+        print(f"password must be at least {MIN_PASSWORD_LENGTH} characters", file=sys.stderr)
         return 1
     print("Add these to your .env (never commit them):")
     print(f"POLYBOT_DASHBOARD_PASSWORD_HASH={hash_password(password)}")
