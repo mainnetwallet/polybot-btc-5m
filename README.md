@@ -62,8 +62,11 @@ Never paste a personal access token into a chat, an issue, or a commit.
 ### 2. Run setup
 
 ```bat
-setup.bat
+.\setup.bat
 ```
+
+> **PowerShell vs cmd:** PowerShell does not run files from the current folder unless you prefix
+> them with `.\` (so `.\setup.bat`, not `setup.bat`). The `.\` form also works in cmd.
 
 This creates `.venv`, installs dependencies, copies `.env.example` to `.env`, and initialises
 the SQLite database and `config\runtime.json` (mode `PAPER`).
@@ -112,11 +115,11 @@ loss), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` a
 ### 6. Start the bot
 
 ```bat
-start.bat
+.\start.bat
 ```
 
 Open <http://127.0.0.1:8765> and log in. Leave the window open; press `Ctrl+C` or run
-`stop.bat` from another terminal to shut down gracefully.
+`.\stop.bat` from another terminal to shut down gracefully.
 
 ### 7. Approve the resolution rule
 
@@ -132,10 +135,14 @@ Until a rule is approved the bot records `RULES_UNAPPROVED` and does not trade.
 ### 8. Day-to-day commands
 
 ```bat
-status.bat   :: mode, recovery, risk, open position, trade counts (JSON)
-stop.bat     :: graceful shutdown
-.venv\Scripts\python.exe -m btc5m_bot backup   :: on-demand database backup
+.\status.bat
+.\stop.bat
+.venv\Scripts\python.exe -m btc5m_bot backup
 ```
+
+- `status.bat` prints mode, recovery, risk, open position and trade counts as JSON.
+- `stop.bat` requests a graceful shutdown.
+- `backup` writes an on-demand database backup to `data\backups\`.
 
 Logs are in `logs\`, data in `data\`. If the bot is not trading, check the **Decisions** tab:
 every NO TRADE has a reason code, listed in [docs/OPERATIONS.md](docs/OPERATIONS.md).
@@ -151,7 +158,7 @@ until the 23-condition gate passes and you type the activation phrase. See
 ## Quick start (Windows)
 
 ```bat
-setup.bat
+.\setup.bat
 ```
 
 `setup.bat` creates `.venv`, installs dependencies, copies `.env.example` to `.env`,
@@ -173,7 +180,7 @@ POLYBOT_SESSION_SECRET=...
 Start the supervised engine and dashboard:
 
 ```bat
-start.bat
+.\start.bat
 ```
 
 Open <http://127.0.0.1:8765>, log in, and inspect **State**, **Markets**, **Rules**,
@@ -182,7 +189,7 @@ Open <http://127.0.0.1:8765>, log in, and inspect **State**, **Markets**, **Rule
 Stop gracefully:
 
 ```bat
-stop.bat
+.\stop.bat
 ```
 
 The supervisor writes `data\STOP`, shuts the heartbeat worker down first, then the engine.
