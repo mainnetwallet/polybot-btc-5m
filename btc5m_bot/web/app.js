@@ -70,6 +70,7 @@ function showLogin() {
 function showApp() {
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
+  route();
 }
 
 async function boot() {
@@ -589,5 +590,33 @@ document.addEventListener("visibilitychange", () => {
     startState();
   }
 });
+
+/* ------------------------------------------------------------------ pages */
+const PAGES = {
+  overview: "Overview", risk: "Risk", golive: "Go live", activity: "Activity",
+  analytics: "Analytics", rules: "Rules", settings: "Settings",
+};
+
+function route() {
+  let page = location.hash.slice(1);
+  if (!(page in PAGES)) page = "overview";
+  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("hidden", p.id !== "page-" + page));
+  document.querySelectorAll(".nav-link").forEach((a) => {
+    const on = a.dataset.page === page;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  document.title = "Polybot — " + PAGES[page].toLowerCase();
+  if ($("app").classList.contains("hidden")) return;
+  if (page === "activity") {
+    const active = document.querySelector(".tab.active");
+    loadTab(active ? active.dataset.tab : "decisions");
+  } else if (page === "rules" || page === "settings") {
+    loadTab(page);
+  }
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", route);
+route();
 
 boot();

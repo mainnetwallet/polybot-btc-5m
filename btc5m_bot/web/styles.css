@@ -68,7 +68,7 @@ input:focus, select:focus { border-color: var(--accent); outline: none; box-shad
 .status-line { font: 12px var(--mono); color: var(--muted); padding: 8px 24px; background: var(--surface); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- layout ---- */
-.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px 24px; padding: 24px 24px 48px; max-width: 1600px; margin: 0 auto; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px 24px; align-content: start; }
 .card { min-width: 0; padding: 16px 18px; background: var(--surface); border-radius: 6px; }
 .card h2 { margin: 0 0 12px; font: 600 15px var(--display); color: var(--text); }
 .card h3 { margin: 16px 0 6px; font-size: 13px; color: var(--warn); }
@@ -146,9 +146,29 @@ td.wrap { white-space: normal; max-width: 420px; overflow-wrap: anywhere; }
   .span4 { grid-column: span 2; }
 }
 @media (max-width: 700px) {
-  .grid { grid-template-columns: 1fr; padding: 16px 12px 40px; gap: 14px; }
+  .grid { grid-template-columns: 1fr; gap: 14px; }
   .span2, .span4, .signal { grid-column: span 1; }
   .topbar, .status-line { padding-left: 12px; padding-right: 12px; }
   .settings-form { grid-template-columns: 1fr; }
+}
+/* ---- pages + sidebar ---- */
+.shell { display: grid; grid-template-columns: 188px minmax(0, 1fr); max-width: 1600px; margin: 0 auto; min-height: calc(100vh - 100px); }
+.nav { position: sticky; top: 58px; align-self: start; display: grid; gap: 2px; padding: 24px 12px; }
+.nav-link { padding: 9px 12px; border-radius: 6px; color: var(--muted); text-decoration: none; font-weight: 600; border-left: 3px solid transparent; }
+.nav-link:hover { color: var(--text); background: var(--surface); }
+.nav-link.active { color: var(--text); background: var(--surface); border-left-color: var(--accent); }
+.content { padding: 24px 24px 48px; min-width: 0; }
+.page > h1 { grid-column: 1 / -1; margin: 0; font: 700 26px var(--display); letter-spacing: -.01em; }
+.page.one { grid-template-columns: minmax(0, 1fr); max-width: 960px; }
+.page.one.full { max-width: none; }
+.stack { display: grid; gap: 8px; }
+.table-wrap { overflow-x: auto; }
+
+@media (max-width: 800px) {
+  .shell { grid-template-columns: 1fr; }
+  .nav { position: static; display: flex; overflow-x: auto; padding: 8px 12px; gap: 4px; background: var(--surface); }
+  .nav-link { white-space: nowrap; border-left: 0; border-bottom: 3px solid transparent; }
+  .nav-link.active { border-bottom-color: var(--accent); background: transparent; }
+  .content { padding: 16px 12px 40px; }
 }
 @media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
