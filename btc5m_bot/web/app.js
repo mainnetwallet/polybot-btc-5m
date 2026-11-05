@@ -108,21 +108,56 @@ $("logout").addEventListener("click", async () => {
 });
 
 /* ------------------------------------------------------------------ state */
+const POLL_MS = 500;
+let inflight = false;
+const clockState = { offsetMs: 0, recvAt: 0, snapAgeMs: 0 };
+
 function startState() {
   if (stateTimer) clearInterval(stateTimer);
   refreshState();
-  stateTimer = setInterval(refreshState, 2000);
+  stateTimer = setInterval(refreshState, POLL_MS);
 }
 
 async function refreshState() {
+  if (inflight) return;
+  inflight = true;
   try {
     const payload = await api("/api/state");
+    const serverMs = Date.parse(payload.server_time);
+    const updatedMs = Date.parse(payload.state && payload.state.updated_at);
+    clockState.offsetMs = Number.isFinite(serverMs) ? serverMs - Date.now() : 0;
+    clockState.recvAt = Date.now();
+    clockState.snapAgeMs = Number.isFinite(serverMs) && Number.isFinite(updatedMs) ? Math.max(0, serverMs - updatedMs) : 0;
     lastState = payload.state;
     renderState(payload.state, payload.server_time);
   } catch (_e) {
     $("status-line").textContent = "disconnected — retrying";
+  } finally {
+    inflight = false;
   }
 }
+
+/* Between server snapshots, keep clocks and countdowns moving locally. */
+function liveMarket(m) {
+  if (!m) return m;
+  const elapsed = (clockState.snapAgeMs + (Date.now() - clockState.recvAt)) / 1000;
+  const endMs = Date.parse(m.end_date);
+  const rem = Number.isFinite(endMs)
+    ? (endMs - (Date.now() + clockState.offsetMs)) / 1000
+    : Number(m.seconds_remaining || 0) - elapsed;
+  const entry = Number(m.entry_seconds_remaining || 0) - elapsed;
+  return Object.assign({}, m, { seconds_remaining: Math.max(0, rem), entry_seconds_remaining: Math.max(0, entry) });
+}
+
+function tickClock() {
+  if (!lastState || $("app").classList.contains("hidden")) return;
+  const elapsedMs = Date.now() - clockState.recvAt + clockState.snapAgeMs;
+  $("server-time").textContent = "server " + new Date(Date.now() + clockState.offsetMs).toISOString().replace("T", " ").slice(0, 19) + "Z";
+  const up = Number(lastState.uptime_seconds);
+  if (Number.isFinite(up)) $("badge-uptime").textContent = Math.floor(up + elapsedMs / 1000) + "s uptime";
+  if (lastState.market) renderMarket(liveMarket(lastState.market));
+}
+setInterval(tickClock, 250);
 
 function badge(node, label, cls) {
   node.textContent = label;
@@ -142,7 +177,7 @@ function renderState(s, serverTime) {
     s.counters ? "decisions=" + text(s.counters.decisions, 0) + " errors=" + text(s.counters.errors, 0) : "",
   ].filter(Boolean).join("  ·  ");
 
-  renderMarket(s.market);
+  renderMarket(liveMarket(s.market));
   renderSignal(s.probability, s.features, s.regime, s.market);
   renderFeeds(s.feeds);
   renderBooks(s.books);
@@ -244,7 +279,7 @@ function renderBooks(books) {
       ["spread", book.spread, ""],
       ["bid depth", book.bid_depth, ""],
       ["ask depth", book.ask_depth, ""],
-      ["age", book.age_ms + "ms", ""],
+      ["age", Math.max(0, Math.round(Number(book.age_ms) || 0)) + " ms", ""],
     ];
     for (const [k, v, cls] of rows) {
       const r = el("div", "row");
