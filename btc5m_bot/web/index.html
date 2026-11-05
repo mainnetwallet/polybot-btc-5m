@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>POLYBOT · Operator Console</title>
+  <title>Polybot — operator console</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <div id="login" class="login-wrap">
     <form id="login-form" class="login-card" autocomplete="off">
-      <div class="brand"><span class="dot"></span> POLYBOT</div>
-      <p class="muted">Local operator console. Authentication required.</p>
+      <div class="brand"><span class="dot"></span> Polybot</div>
+      <p class="muted lede">Sign in to the operator console on this machine.</p>
       <label>Username<input id="login-user" type="text" autocomplete="username" required></label>
       <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
       <button type="submit" class="btn primary">Sign in</button>
@@ -21,7 +21,7 @@
 
   <div id="app" class="hidden">
     <header class="topbar">
-      <div class="brand"><span class="dot"></span> POLYBOT</div>
+      <div class="brand"><span class="dot"></span> Polybot</div>
       <div class="badges">
         <span id="badge-mode" class="badge">PAPER</span>
         <span id="badge-health" class="badge">UNKNOWN</span>
@@ -36,12 +36,7 @@
     <div id="status-line" class="status-line">initialising…</div>
 
     <main class="grid">
-      <section class="card span2">
-        <h2>Market</h2>
-        <div class="kv" id="market"></div>
-      </section>
-
-      <section class="card">
+      <section class="card signal">
         <h2>Signal</h2>
         <div class="prob">
           <div class="prob-head">
@@ -51,6 +46,11 @@
           <div class="bar"><div id="prob-bar" class="bar-fill"></div></div>
           <div class="kv" id="signal"></div>
         </div>
+      </section>
+
+      <section class="card span2">
+        <h2>Market</h2>
+        <div class="kv" id="market"></div>
       </section>
 
       <section class="card">
@@ -68,8 +68,8 @@
         <div class="kv" id="position"></div>
       </section>
 
-      <section class="card">
-        <h2>Risk</h2>
+      <section class="card risk">
+        <h2>Risk and kill switch</h2>
         <div class="kv" id="risk"></div>
         <div class="controls">
           <input id="kill-reason" placeholder="Kill reason" class="input">
@@ -91,8 +91,8 @@
         <div id="decision" class="decision">no decisions yet</div>
       </section>
 
-      <section class="card">
-        <h2>LIVE gate</h2>
+      <section class="card gate">
+        <h2>Live trading gate</h2>
         <div class="gate-head">
           <span id="gate-summary" class="muted">not evaluated</span>
           <button id="gate-refresh" class="btn ghost small">Evaluate</button>
