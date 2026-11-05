@@ -21,9 +21,13 @@ function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
+function isEmpty(v) { return v === null || v === undefined || v === "" || v === "—"; }
+
 function kv(container, rows) {
   clear(container);
-  for (const [key, value, cls] of rows) {
+  const shown = rows.filter((r) => !isEmpty(r[1]));
+  if (!shown.length) { container.appendChild(el("p", "idle-note", "No data yet.")); return; }
+  for (const [key, value, cls] of shown) {
     container.appendChild(el("div", "k", key));
     container.appendChild(el("div", "v" + (cls ? " " + cls : ""), text(value)));
   }
@@ -335,7 +339,9 @@ function renderGate(gate) {
 
 function stats(container, rows) {
   clear(container);
-  for (const [label, value, cls, wide] of rows) {
+  const shown = rows.filter((r) => !isEmpty(r[1]));
+  if (!shown.length) { container.appendChild(el("p", "idle-note", "No data yet.")); return; }
+  for (const [label, value, cls, wide] of shown) {
     const tile = el("div", "stat" + (wide ? " wide" : ""));
     tile.appendChild(el("div", "stat-label", label));
     tile.appendChild(el("div", "stat-value" + (cls ? " " + cls : ""), text(value)));
@@ -447,6 +453,14 @@ document.querySelectorAll(".tab").forEach((tab) => {
 
 function table(node, columns, rows) {
   clear(node);
+  if (!rows.length) {
+    const tb = el("tbody"), tr = el("tr");
+    tr.appendChild(el("td", "empty", "Nothing here yet."));
+    tb.appendChild(tr);
+    node.appendChild(tb);
+    return;
+  }
+  columns = columns.filter((c) => rows.some((r) => !isEmpty(c.value(r))));
   const thead = el("thead");
   const htr = el("tr");
   for (const c of columns) htr.appendChild(el("th", null, c.label));

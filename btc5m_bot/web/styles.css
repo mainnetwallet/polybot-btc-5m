@@ -227,3 +227,5 @@ th, td { padding: 8px 12px; }
 .signal.idle .prob-head { margin-bottom: 8px; }
 .prob-outcome.idle { color: var(--text); }
 .idle-note { grid-column: 1 / -1; margin: 0; max-width: 60ch; color: var(--muted); line-height: 1.5; }
+
+td.empty { padding: 20px 12px; color: var(--muted); border-bottom: 0; }
