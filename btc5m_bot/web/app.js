@@ -139,7 +139,7 @@ function renderState(s, serverTime) {
   ].filter(Boolean).join("  ·  ");
 
   renderMarket(s.market);
-  renderSignal(s.probability, s.features, s.regime);
+  renderSignal(s.probability, s.features, s.regime, s.market);
   renderFeeds(s.feeds);
   renderBooks(s.books);
   renderPosition(s.position);
@@ -171,13 +171,20 @@ function renderMarket(m) {
   ]);
 }
 
-function renderSignal(p, f, regime) {
+function renderSignal(p, f, regime, market) {
+  const card = $("prob-outcome").closest(".signal");
+  if (card) card.classList.toggle("idle", !p);
   if (!p) {
-    $("prob-outcome").textContent = "No signal yet";
+    $("prob-outcome").textContent = "No signal";
     $("prob-outcome").className = "prob-outcome idle";
     $("prob-value").textContent = "";
     $("prob-bar").style.width = "0%";
-    kv($("signal"), [["status", "waiting for enough price data"]]);
+    let note = "No estimate yet. It appears once the engine has enough BTC price data.";
+    if (!market) note = "Waiting for a market to trade.";
+    else if (Number(market.entry_seconds_remaining) <= 0) note = "The entry window for this market has closed. Estimates only run while it is open, so the next one comes with the next 5-minute market.";
+    const box = $("signal");
+    clear(box);
+    box.appendChild(el("p", "idle-note", note));
     return;
   }
   const up = Number(p.p_up);

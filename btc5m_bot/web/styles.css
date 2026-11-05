@@ -221,3 +221,9 @@ th, td { padding: 8px 12px; }
   .alert-row { padding: 9px 12px; }
   .group .fields { grid-template-columns: 1fr; }
 }
+
+/* signal: empty state is one calm message, no empty gauge */
+.signal.idle .bar { display: none; }
+.signal.idle .prob-head { margin-bottom: 8px; }
+.prob-outcome.idle { color: var(--text); }
+.idle-note { grid-column: 1 / -1; margin: 0; max-width: 60ch; color: var(--muted); line-height: 1.5; }
