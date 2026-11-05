@@ -502,13 +502,23 @@ class BotEngine:
                     "health": s.health.value,
                     "age_ms": s.age_ms,
                     "last_value": _dec(s.last_value),
+                    "last_tick_at": s.last_tick_at.isoformat() if s.last_tick_at else None,
                     "detail": s.detail,
                 }
                 for s in (composite.primary, composite.secondary, composite.oracle)
             ]
         if self.oracle is not None:
             s = self.oracle.status(now)
-            return [{"name": s.name, "health": s.health.value, "age_ms": s.age_ms, "detail": s.detail}]
+            return [
+                {
+                    "name": s.name,
+                    "health": s.health.value,
+                    "age_ms": s.age_ms,
+                    "last_value": _dec(s.last_value),
+                    "last_tick_at": s.last_tick_at.isoformat() if s.last_tick_at else None,
+                    "detail": s.detail,
+                }
+            ]
         return []
 
     async def _live_ticker(self) -> None:
@@ -1211,6 +1221,12 @@ class BotEngine:
             market = machine.market
             market_state = machine.state.value
             rule = self.repo.get_resolution_rule(market.rules_fingerprint)
+            # Display only (dashboard "Price To Beat"): the Chainlink reference at the window start.
+            price_to_beat = (
+                self.tracker.opening_reference(machine.start, tolerance_seconds=30.0)
+                if now >= machine.start
+                else None
+            )
             market_payload = {
                 "market_id": market.market_id,
                 "slug": market.slug,
@@ -1221,6 +1237,7 @@ class BotEngine:
                 "event_start": machine.start.isoformat(),
                 "end_date": machine.end.isoformat(),
                 "entry_deadline": machine.entry_deadline.isoformat(),
+                "price_to_beat": _dec(price_to_beat),
                 "seconds_remaining": round(machine.seconds_remaining(now), 1),
                 "entry_seconds_remaining": round(machine.entry_seconds_remaining(now), 1),
                 "tick_size": _dec(market.tick_size),

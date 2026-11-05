@@ -13,6 +13,7 @@ from btc5m_bot.analytics.validation import build_validation_report
 from btc5m_bot.api.app import create_app
 from btc5m_bot.config import ConfigStore, RuntimeConfig
 from btc5m_bot.gate import GateCondition, GateReport
+from btc5m_bot.oracle.twap import TwapObservation, TwapTracker
 
 from conftest import START
 
@@ -103,6 +104,7 @@ class StubRisk:
 class StubEngine:
     def __init__(self) -> None:
         self.risk = StubRisk()
+        self.tracker = TwapTracker(window_seconds=60)
         self.state = SimpleNamespace(
             snapshot=lambda: {
                 "mode": "PAPER",
@@ -287,6 +289,39 @@ def test_stream_requires_login_rejects_foreign_origin_and_pushes_redacted_state(
     assert message["state"]["mode"] == "PAPER"
     assert "server_time" in message
     assert "a" * 64 not in str(message), "secrets must be redacted on the stream too"
+
+
+def test_chart_endpoint_returns_recent_chainlink_ticks_only(client):
+    test_client, engine, _ = client
+    assert test_client.get("/api/chart").status_code == 401
+    login(test_client)
+
+    now = datetime.now(timezone.utc)
+    recent = now - timedelta(seconds=30)
+    latest = now - timedelta(seconds=5)
+    for ts, value, source in (
+        (now - timedelta(seconds=400), "1.00", "chainlink"),      # older than the window
+        (recent, "75000.50", "chainlink"),
+        (now - timedelta(seconds=10), "75001.25", "binance"),     # not the settlement source
+        (latest, "75002.75", "chainlink"),
+    ):
+        engine.tracker.add(TwapObservation(ts=ts, value=Decimal(value), source=source))
+
+    response = test_client.get("/api/chart?seconds=180")
+    assert response.status_code == 200
+    assert response.json()["points"] == [
+        [int(recent.timestamp() * 1000), 75000.5],
+        [int(latest.timestamp() * 1000), 75002.75],
+    ]
+
+
+def test_dashboard_serves_the_market_hero(client):
+    test_client, _, _ = client
+    page = test_client.get("/")
+    for element_id in ("hero", "hero-svg", "px-beat", "px-now", "px-delta", "cd-min", "cd-sec", "past-btn", "hero-wins"):
+        assert f'id="{element_id}"' in page.text
+    assert '<script src="/static/hero.js">' in page.text
+    assert test_client.get("/static/hero.js").status_code == 200
 
 
 def test_state_store_version_changes_on_every_update():

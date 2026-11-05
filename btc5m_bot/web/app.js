@@ -76,6 +76,7 @@ function showApp() {
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
   route();
+  if (window.Hero) window.Hero.start(api);
 }
 
 async function boot() {
@@ -154,6 +155,7 @@ function handlePayload(payload) {
   clockState.offsetMs = Number.isFinite(serverMs) ? serverMs - Date.now() : 0;
   lastState = payload.state;
   renderState(payload.state, payload.server_time);
+  if (window.Hero) window.Hero.update(payload.state, payload.server_time);
 }
 
 async function refreshState() {

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
@@ -264,6 +264,19 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
     async def resolutions(limit: int = 100, session: Session = Depends(_session)) -> dict[str, Any]:
         rows = await asyncio.to_thread(repo.list_resolutions, max(1, min(limit, 500)))
         return {"ok": True, "resolutions": [_row(r) for r in rows]}
+
+    @app.get("/api/chart")
+    async def chart(seconds: int = 180, session: Session = Depends(_session)) -> dict[str, Any]:
+        """Recent Chainlink TWAP ticks as [epoch_ms, price] pairs for the dashboard hero chart."""
+        span = max(1, min(seconds, 600))
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=span)
+        points = [
+            [int(o.ts.timestamp() * 1000), float(o.value)]
+            for o in engine.tracker.observations_between(cutoff, now)
+            if o.is_chainlink
+        ]
+        return {"ok": True, "points": points}
 
     @app.get("/api/analytics")
     async def analytics(session: Session = Depends(_session)) -> dict[str, Any]:

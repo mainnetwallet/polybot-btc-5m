@@ -230,3 +230,121 @@ th, td { padding: 8px 12px; }
 .idle-note { grid-column: 1 / -1; margin: 0; max-width: 60ch; color: var(--muted); line-height: 1.5; }
 
 td.empty { padding: 20px 12px; color: var(--muted); border-bottom: 0; }
+
+/* ---- market hero: Polymarket-style header + live Chainlink chart ---- */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.hero {
+  --h-bg: #0e1116; --h-pill: #1b1f29; --h-line: #232834; --h-text: #f3f5f8; --h-muted: #8b92a5;
+  --h-orange: #f7931a; --h-green: #2fa84f; --h-red: #e5484d;
+  grid-column: 1 / -1; min-width: 0; padding: 22px 26px 20px;
+  background: var(--h-bg); border: 1px solid var(--h-line); border-radius: 14px; color: var(--h-text);
+}
+.hero h2 { margin: 0; font: 700 22px/1.25 var(--sans); letter-spacing: -.005em; }
+.hero svg { display: block; }
+
+.hero-top { display: flex; align-items: center; gap: 18px; }
+.hero-icon { flex: none; width: 64px; height: 64px; color: #fff; }
+.hero-title { min-width: 0; flex: 1; }
+.hero-sub { display: flex; align-items: center; gap: 8px; margin-top: 2px; color: var(--h-muted); font-size: 14px; }
+.info { display: inline-flex; cursor: help; border-radius: 50%; }
+.info svg { width: 15px; height: 15px; fill: none; stroke: var(--h-muted); stroke-width: 1.3; stroke-linecap: round; }
+.hero-tools { display: flex; gap: 26px; margin-right: 6px; }
+.hero-tools svg { width: 20px; height: 20px; fill: none; stroke: #c4c9d4; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.hero-stats { display: flex; align-items: center; gap: 24px; margin-top: 20px; }
+.px-label { display: flex; align-items: center; gap: 8px; font: 500 13px/1.3 var(--sans); color: var(--h-muted); }
+.px-val { font: 700 28px/1.2 var(--sans); letter-spacing: -.01em; }
+.px-beat .px-val { color: #b4b9c5; }
+.px-now .px-label, .px-now .px-val { color: var(--h-orange); }
+.px-sep { align-self: stretch; width: 1px; background: var(--h-line); }
+.px-delta { font: 600 12px var(--sans); }
+.hero .px-delta.up { color: var(--h-green); }
+.hero .px-delta.down { color: var(--h-red); }
+
+.countdown { display: flex; gap: 16px; }
+.cd { display: grid; justify-items: center; line-height: 1; }
+.cd span { font: 700 30px/1 var(--sans); color: var(--h-text); }
+.cd small { margin-top: 5px; font: 600 11px var(--sans); letter-spacing: .06em; color: var(--h-muted); }
+.countdown.hot .cd span { color: var(--h-red); }
+.countdown.hot .cd small { color: #b8575b; }
+
+.hero-chart { position: relative; height: 300px; margin-top: 14px; }
+#hero-svg { width: 100%; height: 100%; touch-action: pan-y; }
+/* When there is no data hero.js adds .hidden. Keep the box laid out (just invisible) so its size is
+   still measured; with display:none the size drops to 0 and the chart could never come back. */
+#hero-svg.hidden { display: block !important; visibility: hidden; }
+.hero-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--h-muted); }
+.hero-src { position: absolute; left: 8px; bottom: 4px; padding: 3px 8px; border-radius: 4px; background: #2a2f3a; color: #c7ccd6; font: 600 11px var(--sans); pointer-events: none; }
+.hero-src.bad { color: var(--warn); }
+
+.hc-stop-top { stop-color: var(--h-orange); stop-opacity: .22; }
+.hc-stop-bot { stop-color: var(--h-orange); stop-opacity: 0; }
+.hc-grid { stroke: var(--h-line); stroke-width: 1; }
+.hc-ylabel, .hc-xlabel { fill: var(--h-muted); font: 12px var(--sans); }
+.hc-ylabel { text-anchor: end; }
+.hc-xlabel { text-anchor: middle; }
+.hc-target-line, .hc-now-line { stroke: #4b5263; stroke-width: 1; stroke-dasharray: 4 4; }
+.hc-area { stroke: none; }
+.hc-line { fill: none; stroke: var(--h-orange); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.hc-ring { fill: rgba(247, 147, 26, .14); stroke: var(--h-orange); stroke-width: 1; }
+.hc-dot { fill: var(--h-orange); }
+.hc-pill-bg { fill: #3b4150; }
+.hc-pill-tx { fill: #fff; font: 600 12px var(--sans); }
+.hc-chev { fill: none; stroke: #fff; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.hc-hit { fill: transparent; cursor: crosshair; }
+.hc-hover { pointer-events: none; }
+.hc-h-line { stroke: #6b7280; stroke-width: 1; }
+.hc-h-dot { fill: var(--h-orange); stroke: #fff; stroke-width: 2; }
+.hc-h-icon { color: #fff; }
+.hc-h-icon-bg { fill: var(--h-orange); }
+.hc-h-price { fill: var(--h-orange); font: 700 14px var(--sans); }
+.hc-h-time { fill: var(--h-muted); font: 12px var(--sans); text-anchor: middle; }
+
+.hero-bottom { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.hpill {
+  display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px;
+  border: 0; border-radius: 19px; background: var(--h-pill); color: var(--h-text); font: 600 14px var(--sans); cursor: pointer;
+}
+.hpill.more { cursor: default; border-radius: 8px; padding: 0 14px; }
+.hpill:hover { background: #232836; }
+.hpill:focus-visible { outline: 2px solid var(--h-orange); outline-offset: 2px; }
+.chev { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.hdiv { width: 1px; height: 18px; background: #343a48; }
+.past-dots { display: inline-flex; gap: 6px; min-width: 6px; }
+.pdot { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; }
+.pdot.up { background: var(--h-green); }
+.pdot.down { background: var(--h-red); }
+.pdot svg { width: 11px; height: 11px; fill: #fff; }
+
+.wins { display: contents; }
+.wpill { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 20px; border-radius: 8px; background: var(--h-pill); color: var(--h-text); font: 600 14px var(--sans); }
+.wpill.on { background: #f1f3f6; color: #0e1116; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--h-red); }
+
+.past-wrap { position: relative; }
+.past-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 20; width: 320px; max-height: 320px; overflow: auto; padding: 6px; background: #161a22; border: 1px solid var(--h-line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); }
+.past-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; font-size: 13px; }
+.past-row:hover { background: var(--h-pill); }
+.past-when { min-width: 74px; color: var(--h-muted); white-space: nowrap; }
+.past-px { color: var(--h-text); }
+.past-empty { padding: 12px; color: var(--h-muted); font-size: 13px; }
+
+.seg { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--h-line); border-radius: 8px; }
+.seg span { display: grid; place-items: center; width: 34px; height: 32px; border-radius: 6px; color: #8b92a5; }
+.seg span.on { background: #2b2113; }
+.seg svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.seg span.on { color: var(--h-orange); }
+.seg .on svg { width: 22px; height: 22px; }
+
+@media (max-width: 800px) {
+  .hero { padding: 16px 14px; }
+  .hero-icon { width: 48px; height: 48px; }
+  .hero h2 { font-size: 18px; }
+  .hero-tools { display: none; }
+  .hero-stats { flex-wrap: wrap; gap: 14px 20px; }
+  .hero-stats .spacer { display: none; }
+  .px-val, .cd span { font-size: 22px; }
+  .hero-chart { height: 240px; }
+  .seg { display: none; }
+}

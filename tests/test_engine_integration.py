@@ -137,6 +137,22 @@ def test_paper_iteration_discovers_and_fails_closed(settings, repo, adapter, con
     assert repo.get_window(market.market_id) is not None
 
 
+def test_dashboard_snapshot_carries_hero_fields(settings, repo, adapter, config_store):
+    """The dashboard hero needs the price to beat and a timestamped Chainlink value."""
+    from datetime import datetime
+
+    clock = FixedClock(START)
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)
+
+    asyncio.run(engine._iteration())
+
+    snap = engine.state.snapshot()
+    assert Decimal(snap["market"]["price_to_beat"]) == Decimal("100000")
+    chainlink = next(f for f in snap["feeds"] if "chainlink" in f["name"])
+    assert Decimal(chainlink["last_value"]) == Decimal("100000")
+    assert datetime.fromisoformat(chainlink["last_tick_at"]) == START
+
+
 def test_live_mode_without_activation_stays_paper(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, _, _ = _build(settings, repo, adapter, config_store, clock)

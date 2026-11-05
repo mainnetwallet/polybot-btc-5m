@@ -8,6 +8,14 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="btc-glyph" viewBox="0 0 32 32">
+      <g fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 8.5v15M12 8.5h7.6a3.6 3.6 0 0 1 0 7.2H12M12 15.7h8.6a3.9 3.9 0 0 1 0 7.8H12M14.5 5.5v3M18.5 5.5v3M14.5 23.5v3M18.5 23.5v3"/>
+      </g>
+    </symbol>
+  </svg>
+
   <div id="login" class="login-wrap">
     <form id="login-form" class="login-card" autocomplete="off">
       <div class="brand"><span class="dot"></span> Polybot</div>
@@ -50,6 +58,75 @@
 
       <section id="page-overview" class="page grid">
         <h1>Overview</h1>
+
+        <section id="hero" class="hero" aria-label="Current BTC 5 minute market">
+          <div class="hero-top">
+            <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true">
+              <rect width="64" height="64" rx="8" fill="#f7931a"/>
+              <use href="#btc-glyph" x="10" y="10" width="44" height="44"/>
+            </svg>
+            <div class="hero-title">
+              <h2>BTC Up or Down 5m</h2>
+              <div class="hero-sub">
+                <span id="hero-window">Waiting for a market</span>
+                <span id="hero-info" class="info" tabindex="0" role="img" aria-label="Market question">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2v.1"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="hero-tools" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-4.5L6 20z"/></svg>
+            </div>
+          </div>
+
+          <div class="hero-stats">
+            <div class="px px-beat">
+              <div class="px-label">Price To Beat</div>
+              <div id="px-beat" class="px-val">—</div>
+            </div>
+            <div class="px-sep"></div>
+            <div class="px px-now">
+              <div class="px-label">Current Price <span id="px-delta" class="px-delta"></span></div>
+              <div id="px-now" class="px-val">—</div>
+            </div>
+            <div class="spacer"></div>
+            <div id="hero-countdown" class="countdown" role="timer" aria-label="Time left in this window">
+              <div class="cd"><span id="cd-min">--</span><small>MINS</small></div>
+              <div class="cd"><span id="cd-sec">--</span><small>SECS</small></div>
+            </div>
+          </div>
+
+          <div class="hero-chart">
+            <svg id="hero-svg" role="img" aria-label="Live Chainlink BTC price, last minute"></svg>
+            <div id="hero-empty" class="hero-empty">Waiting for Chainlink prices…</div>
+            <span id="hero-src" class="hero-src">Source: Chainlink TWAP</span>
+          </div>
+
+          <div class="hero-bottom">
+            <div id="past-wrap" class="past-wrap">
+              <button id="past-btn" type="button" class="hpill" aria-expanded="false" aria-controls="past-pop">
+                <span>Past</span>
+                <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                <span class="hdiv"></span>
+                <span id="past-dots" class="past-dots"></span>
+              </button>
+              <div id="past-pop" class="past-pop hidden" role="dialog" aria-label="Settled windows"></div>
+            </div>
+            <div id="hero-wins" class="wins"></div>
+            <span class="hpill more" aria-hidden="true">More
+              <svg class="chev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg>
+            </span>
+            <div class="spacer"></div>
+            <div class="seg" aria-hidden="true">
+              <span><svg viewBox="0 0 24 24"><path d="M4 18V6M4 18h16M7 14l4-4 3 3 5-6"/></svg></span>
+              <span class="on"><svg viewBox="0 0 32 32"><use href="#btc-glyph" width="32" height="32"/></svg></span>
+              <span><svg viewBox="0 0 24 24"><path d="M8 4v16M16 4v16M6 8h4v7H6zM14 6h4v9h-4z"/></svg></span>
+            </div>
+          </div>
+        </section>
+
         <div class="cols">
           <div class="col">
         <section class="card signal">
@@ -197,6 +274,7 @@
     </div>
   </div>
 
+  <script src="/static/hero.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
