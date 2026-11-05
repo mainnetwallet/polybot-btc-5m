@@ -145,6 +145,7 @@ function renderState(s, serverTime) {
   renderPosition(s.position);
   renderRisk(s.risk);
   renderDecision(s.last_decision);
+  renderAlert(s.risk, s.market);
   renderGate(s.live && s.live.gate);
   renderAnalytics(s.analytics);
 }
@@ -172,10 +173,11 @@ function renderMarket(m) {
 
 function renderSignal(p, f, regime) {
   if (!p) {
-    $("prob-outcome").textContent = "—";
-    $("prob-value").textContent = "—";
+    $("prob-outcome").textContent = "No signal yet";
+    $("prob-outcome").className = "prob-outcome idle";
+    $("prob-value").textContent = "";
     $("prob-bar").style.width = "0%";
-    kv($("signal"), [["status", "no probability estimate"]]);
+    kv($("signal"), [["status", "waiting for enough price data"]]);
     return;
   }
   const up = Number(p.p_up);
@@ -208,7 +210,9 @@ function renderFeeds(feeds) {
   for (const feed of feeds) {
     const row = el("div", "feed");
     row.appendChild(el("span", null, feed.name));
-    row.appendChild(el("span", "muted", text(feed.last_value, "") + " " + (feed.age_ms !== undefined ? feed.age_ms + "ms" : "")));
+    const lv = Number(feed.last_value);
+    const shown = feed.last_value === null || feed.last_value === undefined || feed.last_value === "" ? "no value" : (Number.isFinite(lv) ? lv.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(feed.last_value));
+    row.appendChild(el("span", "muted", shown + (feed.age_ms !== undefined ? "  ·  " + Math.max(0, Math.round(feed.age_ms)) + " ms ago" : "")));
     const pill = el("span", "pill " + feed.health, feed.health);
     row.appendChild(pill);
     if (feed.detail) row.title = feed.detail;
@@ -253,6 +257,25 @@ function renderPosition(p) {
     ["status", p.status, p.status === "DUST" ? "warn" : ""],
     ["market", p.market_id],
   ]);
+}
+
+function renderAlert(risk, market) {
+  const box = $("alert");
+  clear(box);
+  const items = [];
+  if (risk && risk.allowed === false) {
+    const fix = risk.reason === "CAPITAL_UNSET" ? ["Set capital", "#settings"] : ["Open risk", "#risk"];
+    items.push(["Trading is blocked: " + text(risk.detail || risk.reason), fix]);
+  }
+  if (market && market.rules_approved === false) items.push(["This market's resolution rules are not approved yet.", ["Approve rules", "#rules"]]);
+  for (const [msg, [label, href]] of items) {
+    const row = el("div", "alert-row");
+    row.appendChild(el("span", null, msg));
+    const a = el("a", null, label); a.href = href;
+    row.appendChild(a);
+    box.appendChild(row);
+  }
+  box.classList.toggle("hidden", items.length === 0);
 }
 
 function renderRisk(risk) {
@@ -303,19 +326,31 @@ function renderGate(gate) {
   }
 }
 
+function stats(container, rows) {
+  clear(container);
+  for (const [label, value, cls, wide] of rows) {
+    const tile = el("div", "stat" + (wide ? " wide" : ""));
+    tile.appendChild(el("div", "stat-label", label));
+    tile.appendChild(el("div", "stat-value" + (cls ? " " + cls : ""), text(value)));
+    container.appendChild(tile);
+  }
+}
+
 function renderAnalytics(a) {
-  if (!a) { kv($("analytics"), [["status", "not loaded"]]); return; }
+  if (!a) { stats($("analytics"), [["status", "not loaded"]]); return; }
   const p = a.paper || {};
-  kv($("analytics"), [
-    ["paper trades", p.trades],
-    ["net PnL", p.net_pnl, Number(p.net_pnl) >= 0 ? "up" : "down"],
-    ["win rate", p.win_rate !== null && p.win_rate !== undefined ? (Number(p.win_rate) * 100).toFixed(1) + "%" : "—"],
-    ["profit factor", p.profit_factor],
-    ["expectancy", p.expectancy],
-    ["max drawdown", p.max_drawdown],
-    ["sharpe / trade", p.sharpe_per_trade],
-    ["validation", a.validation ? (a.validation.passed ? "PASSED" : "NOT PASSED") : "—", a.validation && a.validation.passed ? "up" : "warn"],
-    ["validation failures", a.validation && a.validation.failures && a.validation.failures.length ? a.validation.failures.join("; ") : "none"],
+  const ok = a.validation && a.validation.passed;
+  const fails = a.validation && a.validation.failures && a.validation.failures.length ? a.validation.failures.join("; ") : "none";
+  stats($("analytics"), [
+    ["Paper trades", p.trades],
+    ["Net PnL", p.net_pnl, Number(p.net_pnl) >= 0 ? "up" : "down"],
+    ["Win rate", p.win_rate !== null && p.win_rate !== undefined ? (Number(p.win_rate) * 100).toFixed(1) + "%" : "—"],
+    ["Profit factor", p.profit_factor],
+    ["Expectancy", p.expectancy],
+    ["Max drawdown", p.max_drawdown],
+    ["Sharpe per trade", p.sharpe_per_trade],
+    ["Validation", a.validation ? (ok ? "Passed" : "Not passed") : "—", ok ? "up" : "warn"],
+    ["Validation failures", fails, "", true],
   ]);
 }
 
@@ -415,7 +450,9 @@ function table(node, columns, rows) {
     const tr = el("tr");
     for (const c of columns) {
       const td = el("td", c.wrap ? "wrap" : null);
-      td.textContent = text(c.value(row), "");
+      let cell = text(c.value(row), "");
+      if (/^\d{4}-\d\d-\d\dT/.test(cell)) cell = cell.replace("T", " ").slice(0, 19);
+      td.textContent = cell;
       tr.appendChild(td);
     }
     if (row.__action) tr.appendChild(row.__action);
@@ -611,6 +648,8 @@ function route() {
   if (page === "activity") {
     const active = document.querySelector(".tab.active");
     loadTab(active ? active.dataset.tab : "decisions");
+  } else if (page === "golive") {
+    $("gate-refresh").click();
   } else if (page === "rules" || page === "settings") {
     loadTab(page);
   }
