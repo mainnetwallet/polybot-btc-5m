@@ -41,22 +41,31 @@ class EngineStateStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._state = _default_state()
+        self._version = 0
+
+    @property
+    def version(self) -> int:
+        """Bumped on every change; lets streams push only when something changed."""
+        return self._version
 
     def reset(self) -> None:
         with self._lock:
             self._state = _default_state()
+            self._version += 1
 
     def update(self, **fields: Any) -> None:
         with self._lock:
             for key, value in fields.items():
                 self._state[key] = value
             self._state["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._version += 1
 
     def increment(self, key: str, amount: int = 1) -> int:
         with self._lock:
             counters = dict(self._state.get("counters") or {})
             counters[key] = int(counters.get(key, 0)) + amount
             self._state["counters"] = counters
+            self._version += 1
             return counters[key]
 
     def snapshot(self) -> dict[str, Any]:

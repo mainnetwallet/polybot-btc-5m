@@ -266,3 +266,35 @@ def test_analytics_and_gate_endpoints_return_backend_state(client):
     gate = test_client.get("/api/gate", headers=headers)
     assert gate.status_code == 200
     assert gate.json()["gate"]["passed"] is True
+
+
+def test_stream_requires_login_rejects_foreign_origin_and_pushes_redacted_state(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    test_client, _engine, _store = client
+    with pytest.raises(WebSocketDisconnect):
+        with test_client.websocket_connect("/api/stream"):
+            pass  # no session cookie yet
+
+    login(test_client)
+    with pytest.raises(WebSocketDisconnect):
+        with test_client.websocket_connect("/api/stream", headers={"origin": "http://evil.example"}):
+            pass
+
+    with test_client.websocket_connect("/api/stream") as ws:
+        message = ws.receive_json()
+    assert message["ok"] is True
+    assert message["state"]["mode"] == "PAPER"
+    assert "server_time" in message
+    assert "a" * 64 not in str(message), "secrets must be redacted on the stream too"
+
+
+def test_state_store_version_changes_on_every_update():
+    from btc5m_bot.state import EngineStateStore
+
+    store = EngineStateStore()
+    v0 = store.version
+    store.update(detail="x")
+    v1 = store.version
+    store.increment("decisions")
+    assert v0 < v1 < store.version

@@ -65,6 +65,7 @@ async function api(path, options = {}) {
 function showLogin() {
   if (stateTimer) clearInterval(stateTimer);
   stateTimer = null;
+  stopStream();
   csrf = null;
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
@@ -110,26 +111,57 @@ $("logout").addEventListener("click", async () => {
 /* ------------------------------------------------------------------ state */
 const POLL_MS = 500;
 let inflight = false;
-const clockState = { offsetMs: 0, recvAt: 0, snapAgeMs: 0 };
+let ws = null;
+let wsRetry = 0;
+let wsTimer = null;
+let lastPushAt = 0;
+const clockState = { offsetMs: 0 };
 
 function startState() {
   if (stateTimer) clearInterval(stateTimer);
   refreshState();
   stateTimer = setInterval(refreshState, POLL_MS);
+  connectStream();
+}
+
+function stopStream() {
+  if (wsTimer) clearTimeout(wsTimer);
+  wsTimer = null;
+  if (ws) { ws.onclose = null; try { ws.close(); } catch (_e) { /* ignore */ } }
+  ws = null;
+}
+
+/* Live push from the server; polling above is only a fallback when the socket is down. */
+function connectStream() {
+  if (ws || document.hidden) return;
+  try {
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/stream");
+  } catch (_e) { ws = null; return; }
+  ws.onopen = () => { wsRetry = 0; };
+  ws.onmessage = (event) => {
+    try { handlePayload(JSON.parse(event.data)); lastPushAt = Date.now(); } catch (_e) { /* ignore bad frame */ }
+  };
+  ws.onclose = () => {
+    ws = null;
+    if ($("app").classList.contains("hidden") || document.hidden) return;
+    wsTimer = setTimeout(connectStream, Math.min(5000, 300 * 2 ** wsRetry++));
+  };
+  ws.onerror = () => { try { ws.close(); } catch (_e) { /* ignore */ } };
+}
+
+function handlePayload(payload) {
+  const serverMs = Date.parse(payload.server_time);
+  clockState.offsetMs = Number.isFinite(serverMs) ? serverMs - Date.now() : 0;
+  lastState = payload.state;
+  renderState(payload.state, payload.server_time);
 }
 
 async function refreshState() {
   if (inflight) return;
+  if (ws && ws.readyState === WebSocket.OPEN && Date.now() - lastPushAt < 3000) return; // push is healthy
   inflight = true;
   try {
-    const payload = await api("/api/state");
-    const serverMs = Date.parse(payload.server_time);
-    const updatedMs = Date.parse(payload.state && payload.state.updated_at);
-    clockState.offsetMs = Number.isFinite(serverMs) ? serverMs - Date.now() : 0;
-    clockState.recvAt = Date.now();
-    clockState.snapAgeMs = Number.isFinite(serverMs) && Number.isFinite(updatedMs) ? Math.max(0, serverMs - updatedMs) : 0;
-    lastState = payload.state;
-    renderState(payload.state, payload.server_time);
+    handlePayload(await api("/api/state"));
   } catch (_e) {
     $("status-line").textContent = "disconnected — retrying";
   } finally {
@@ -137,27 +169,30 @@ async function refreshState() {
   }
 }
 
-/* Between server snapshots, keep clocks and countdowns moving locally. */
+/* Between pushes, keep clocks and countdowns moving from absolute server timestamps. */
+function serverNowMs() { return Date.now() + clockState.offsetMs; }
+
+function secondsUntil(iso, fallback) {
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? (ms - serverNowMs()) / 1000 : Number(fallback || 0);
+}
+
 function liveMarket(m) {
   if (!m) return m;
-  const elapsed = (clockState.snapAgeMs + (Date.now() - clockState.recvAt)) / 1000;
-  const endMs = Date.parse(m.end_date);
-  const rem = Number.isFinite(endMs)
-    ? (endMs - (Date.now() + clockState.offsetMs)) / 1000
-    : Number(m.seconds_remaining || 0) - elapsed;
-  const entry = Number(m.entry_seconds_remaining || 0) - elapsed;
-  return Object.assign({}, m, { seconds_remaining: Math.max(0, rem), entry_seconds_remaining: Math.max(0, entry) });
+  return Object.assign({}, m, {
+    seconds_remaining: Math.max(0, secondsUntil(m.end_date, m.seconds_remaining)),
+    entry_seconds_remaining: Math.max(0, secondsUntil(m.entry_deadline, m.entry_seconds_remaining)),
+  });
 }
 
 function tickClock() {
   if (!lastState || $("app").classList.contains("hidden")) return;
-  const elapsedMs = Date.now() - clockState.recvAt + clockState.snapAgeMs;
-  $("server-time").textContent = "server " + new Date(Date.now() + clockState.offsetMs).toISOString().replace("T", " ").slice(0, 19) + "Z";
-  const up = Number(lastState.uptime_seconds);
-  if (Number.isFinite(up)) $("badge-uptime").textContent = Math.floor(up + elapsedMs / 1000) + "s uptime";
+  $("server-time").textContent = "server " + new Date(serverNowMs()).toISOString().replace("T", " ").slice(0, 19) + "Z";
+  const started = Date.parse(lastState.started_at);
+  if (Number.isFinite(started)) $("badge-uptime").textContent = Math.max(0, Math.floor((serverNowMs() - started) / 1000)) + "s uptime";
   if (lastState.market) renderMarket(liveMarket(lastState.market));
 }
-setInterval(tickClock, 250);
+setInterval(tickClock, 100);
 
 function badge(node, label, cls) {
   node.textContent = label;
@@ -679,6 +714,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     if (stateTimer) clearInterval(stateTimer);
     stateTimer = null;
+    stopStream();
   } else if (!$("app").classList.contains("hidden")) {
     startState();
   }

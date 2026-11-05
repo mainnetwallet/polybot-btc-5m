@@ -70,6 +70,7 @@ from .types import (
 log = logging.getLogger(__name__)
 
 LOOP_SECONDS = 0.75
+LIVE_TICK_SECONDS = 0.1  # display-only feed refresh between engine iterations
 DISCOVERY_SECONDS = 15.0
 GATE_REFRESH_SECONDS = 60.0
 BOOK_RECORD_SECONDS = 2.0
@@ -238,6 +239,7 @@ class BotEngine:
             await self._start_feed_tasks()
             if self.start_api:
                 await self._start_api()
+                self._ticker_task = asyncio.create_task(self._live_ticker())
             await self._maybe_backup(force=True)
             self.state.update(engine_healthy=True, detail="running")
             self.lease.renew(engine_pid=os.getpid(), healthy=True, detail="engine ready")
@@ -298,6 +300,11 @@ class BotEngine:
         self._running = False
         self.lease.invalidate("engine shutting down", engine_pid=os.getpid())
         self.state.update(engine_healthy=False, detail="stopping")
+        ticker = getattr(self, "_ticker_task", None)
+        if ticker is not None:
+            ticker.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await ticker
         if self._server is not None:
             self._server.should_exit = True
             await asyncio.sleep(0.2)
@@ -486,6 +493,49 @@ class BotEngine:
         self._composite = CompositeFeedHealth().evaluate(
             feed_values[0].series, feed_values[1].series, oracle_status, now
         )
+
+    def _feeds_payload(self, now: datetime, composite: Any) -> list[dict[str, Any]]:
+        if composite is not None:
+            return [
+                {
+                    "name": s.name,
+                    "health": s.health.value,
+                    "age_ms": s.age_ms,
+                    "last_value": _dec(s.last_value),
+                    "detail": s.detail,
+                }
+                for s in (composite.primary, composite.secondary, composite.oracle)
+            ]
+        if self.oracle is not None:
+            s = self.oracle.status(now)
+            return [{"name": s.name, "health": s.health.value, "age_ms": s.age_ms, "detail": s.detail}]
+        return []
+
+    async def _live_ticker(self) -> None:
+        """Display only: push fresh feed prices/health to the dashboard ~10x/second.
+
+        Trading logic is untouched: this builds its own local health evaluation and never
+        assigns self._composite, so decisions still see exactly what the iteration computed.
+        """
+        from .data.health import CompositeFeedHealth
+
+        while not self._stop.is_set():
+            try:
+                now = self.clock.now()
+                feed_values = list(self.feeds.values())
+                composite = None
+                if len(feed_values) >= 2:
+                    oracle_status = self.oracle.status(now) if self.oracle is not None else self._empty_oracle_status()
+                    composite = CompositeFeedHealth().evaluate(feed_values[0].series, feed_values[1].series, oracle_status, now)
+                feeds = self._feeds_payload(now, composite)
+                if feeds:
+                    self.state.update(
+                        feeds=feeds,
+                        oracle=next((f for f in feeds if f["name"] == "chainlink_twap"), {"health": "UNVERIFIED", "detail": "unavailable"}),
+                    )
+            except Exception as exc:  # noqa: BLE001 - display helper must never affect trading
+                log.debug("live ticker skipped: %s", exc)
+            await asyncio.sleep(LIVE_TICK_SECONDS)
 
     def _empty_oracle_status(self):
         from .types import FeedStatus
@@ -1197,21 +1247,7 @@ class BotEngine:
                 "mark": _dec(mark),
                 "roi": _dec((mark * position.shares - position.cost_basis) / position.cost_basis) if mark and position.cost_basis else None,
             }
-        feeds = []
-        if self._composite is not None:
-            feeds = [
-                {
-                    "name": s.name,
-                    "health": s.health.value,
-                    "age_ms": s.age_ms,
-                    "last_value": _dec(s.last_value),
-                    "detail": s.detail,
-                }
-                for s in (self._composite.primary, self._composite.secondary, self._composite.oracle)
-            ]
-        elif self.oracle is not None:
-            s = self.oracle.status(now)
-            feeds = [{"name": s.name, "health": s.health.value, "age_ms": s.age_ms, "detail": s.detail}]
+        feeds = self._feeds_payload(now, self._composite)
         books = {}
         for outcome in (Outcome.UP, Outcome.DOWN):
             if machine is None:

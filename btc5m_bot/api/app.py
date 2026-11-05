@@ -8,8 +8,9 @@ from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -109,7 +110,7 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -186,6 +187,53 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
             "state": redact(snapshot),
             "server_time": datetime.now(timezone.utc).isoformat(),
         }
+
+    @app.websocket("/api/stream")
+    async def stream(ws: WebSocket) -> None:
+        """Push engine state to the dashboard the moment it changes (no polling lag)."""
+        token = ws.cookies.get(SESSION_COOKIE)
+        origin = ws.headers.get("origin")
+        if auth.decode(token) is None or (origin and urlparse(origin).netloc != ws.headers.get("host")):
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+        gone = asyncio.Event()
+
+        async def drain() -> None:  # notice when the browser goes away
+            try:
+                while True:
+                    await ws.receive_text()
+            except (WebSocketDisconnect, RuntimeError):
+                gone.set()
+
+        drain_task = asyncio.create_task(drain())
+        last_version: Any = object()
+        last_sent = 0.0
+        last_auth = time.monotonic()
+        try:
+            while not gone.is_set():
+                now = time.monotonic()
+                if now - last_auth > 5:
+                    last_auth = now
+                    if auth.decode(token) is None:
+                        await ws.close(code=1008)
+                        return
+                version = getattr(engine.state, "version", None)
+                changed = version is None or version != last_version
+                # Cap at ~20 pushes/s; always send at least every 2s so the client sees it is alive.
+                if (changed and now - last_sent >= 0.05) or now - last_sent >= 2.0:
+                    last_version = version
+                    last_sent = now
+                    await ws.send_json({
+                        "ok": True,
+                        "state": redact(engine.state.snapshot()),
+                        "server_time": datetime.now(timezone.utc).isoformat(),
+                    })
+                await asyncio.sleep(0.02)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            drain_task.cancel()
 
     @app.get("/api/decisions")
     async def decisions(limit: int = 100, session: Session = Depends(_session)) -> dict[str, Any]:
