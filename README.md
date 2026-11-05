@@ -199,17 +199,18 @@ The supervisor writes `data\STOP`, shuts the heartbeat worker down first, then t
 
 ## Deploy on Render (PAPER) with UptimeRobot
 
-`render.yaml` is a Render Blueprint: one web service, PAPER mode, and a 1 GB persistent disk
-mounted at `/var/data` (SQLite, Parquet, logs and `runtime.json` live there). It is a *web*
-service only so that Render and UptimeRobot have something to call. The operator dashboard is
-**not** exposed and still binds loopback only. The single public listener is
+`render.yaml` is a Render Blueprint: one web service in PAPER mode on Render's **free** plan. It is
+a *web* service only so that Render and UptimeRobot have something to call. The operator dashboard
+is **not** exposed and still binds loopback only. The single public listener is
 `btc5m_bot/healthserver.py`, which returns status codes and short reason codes, never trading
 state or secrets.
 
-1. Push the repo to GitHub, then in Render choose **New > Blueprint** and select it. Deploys are
-   manual (`autoDeployTrigger: "off"`), so the bot only restarts when you decide.
-2. Fill in the `sync: false` values under the service's **Environment**: dashboard hash and session
-   secret (`python -m btc5m_bot hash-password`) and the three `POLYBOT_CLOB_API_*` values.
+1. In Render choose **New > Blueprint** and select this repo (or use the Render API/MCP). Deploys
+   are manual (`autoDeployTrigger: "off"`), so the bot only restarts when you decide.
+2. Fill in the `sync: false` values under the service's **Environment**. `POLYBOT_DASHBOARD_PASSWORD_HASH`
+   is required (the engine does not start without it); generate it and the session secret with
+   `python -m btc5m_bot hash-password`. The three `POLYBOT_CLOB_API_*` values are needed to verify
+   the Chainlink oracle; without them the bot runs but records NO TRADE.
 3. Deploy. Render's health check calls `/healthz`.
 4. In UptimeRobot add an **HTTP(s)** monitor for `https://<your-service>.onrender.com/health`
    (5 minute interval; GET and HEAD both work).
@@ -220,12 +221,28 @@ state or secrets.
 | `/health` | readiness, UptimeRobot | 200 only if the supervisor is `RUNNING`, the engine process is alive and its lease is fresh; otherwise 503 with a `reason` |
 
 `/health` reports outages. A bot that is alive but intentionally not trading (unapproved rule,
-unset capital, unhealthy feeds) still returns 200; those NO TRADE reasons are in the dashboard's
-**Decisions** tab. Because the dashboard is unreachable on Render, run operator commands from the
-service's Render Shell instead, for example `python -m btc5m_bot status`, `approve-rule <fingerprint>`
-and `backup`. Set `capital_usd` in `/var/data/config/runtime.json` and restart, since the file is
-read at startup. Details and the full list of reason codes are in
+unset capital, unhealthy feeds) still returns 200. Details and the full list of reason codes are in
 [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+### Free plan limits
+
+From [Render's free-tier docs](https://render.com/docs/free). They decide what this deployment can do:
+
+- **No persistent disk.** The SQLite database, approved rules, paper trades, recordings and
+  `runtime.json` live under `/tmp/polybot` and are lost on every restart, redeploy and spin-down.
+- **No Shell or SSH, and no dashboard.** `approve-rule`, `status` and `backup` cannot be run, and
+  `capital_usd` cannot be set. Until a rule is approved and capital is set the bot records NO TRADE:
+  it collects data and reports health but does not paper-trade.
+- **Spin-down and hours.** An idle service spins down after 15 minutes without inbound traffic. An
+  UptimeRobot monitor keeps it awake, but the 750 free instance hours per month are shared by all
+  free web services in the workspace, and one always-on service uses about 730 of them. When the
+  hours run out, every free web service in the workspace is suspended until the next month.
+
+To operate the bot for real, switch to a paid plan with a disk: in `render.yaml` set
+`plan: starter`, uncomment the `disk` block and point the three `POLYBOT_*_DIR` variables at
+`/var/data/...`. Render Shell then works, so run `python -m btc5m_bot status`,
+`approve-rule <fingerprint>` and `backup` there, and set `capital_usd` in
+`/var/data/config/runtime.json` (restart afterwards; the file is read at startup).
 
 ---
 

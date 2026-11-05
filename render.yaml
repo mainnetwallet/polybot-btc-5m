@@ -1,4 +1,4 @@
-# Render Blueprint for POLYBOT (PAPER mode).
+# Render Blueprint for POLYBOT (PAPER mode), FREE plan.
 #
 # Runs as a web service ONLY so that Render (and UptimeRobot) can reach a health endpoint. The
 # operator dashboard is still bound to loopback by design (the engine refuses any other host), so
@@ -16,35 +16,50 @@
 #               https://<your-service>.onrender.com/health
 #             (HTTP(s) monitor, 5 min interval; GET or HEAD both work).
 #
+# FREE plan limits that matter here (see https://render.com/docs/free):
+#   * No persistent disk. The SQLite database, approved rules, paper trades, recordings and
+#     runtime.json live under /tmp/polybot and are lost on every restart, redeploy and spin-down.
+#   * No Shell/SSH, and the dashboard is not exposed, so operator commands (approve-rule, status,
+#     backup) cannot be run. Until a rule is approved and capital_usd is set the bot records
+#     NO TRADE: it collects data and reports health, but does not paper-trade.
+#   * Idle services spin down after 15 minutes without inbound traffic. An UptimeRobot monitor
+#     keeps it awake, but the 750 free instance hours per month are shared by ALL free web
+#     services in the workspace; when they run out, every free service is suspended until next month.
+#
+# To operate the bot for real, move to a paid plan with a disk: set `plan: starter`, uncomment the
+# disk block and the /var/data directory variables below (and remove the /tmp/polybot ones).
+#
 # Secrets (sync: false) are NOT stored here. Enter their values in the Render dashboard
 # (service -> Environment). Generate the first two with: python -m btc5m_bot hash-password
+# POLYBOT_DASHBOARD_PASSWORD_HASH is REQUIRED: the engine does not start without it.
 services:
   - type: web
     name: polybot-btc-5m
     runtime: python
     region: frankfurt
-    plan: starter
+    plan: free
     branch: master
     # A trading bot should only restart on purpose, so deploys are manual.
     autoDeployTrigger: "off"
     buildCommand: pip install --upgrade pip && pip install .
     startCommand: python -m btc5m_bot supervisor
     healthCheckPath: /healthz
-    # SQLite database, parquet recordings, logs and runtime.json live here. Without a disk
-    # they would be wiped on every restart and deploy.
-    disk:
-      name: polybot-data
-      mountPath: /var/data
-      sizeGB: 1
+    # Paid plans only (free services cannot attach a disk): keeps the database, parquet
+    # recordings, logs and runtime.json across restarts and deploys.
+    # disk:
+    #   name: polybot-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
+      # Ephemeral on the free plan. With a disk use /var/data/data, /var/data/logs, /var/data/config.
       - key: POLYBOT_DATA_DIR
-        value: /var/data/data
+        value: /tmp/polybot/data
       - key: POLYBOT_LOGS_DIR
-        value: /var/data/logs
+        value: /tmp/polybot/logs
       - key: POLYBOT_CONFIG_DIR
-        value: /var/data/config
+        value: /tmp/polybot/config
       - key: POLYBOT_HEARTBEAT_ENABLED
         value: "false"
       - key: POLYBOT_DASHBOARD_PASSWORD_HASH
