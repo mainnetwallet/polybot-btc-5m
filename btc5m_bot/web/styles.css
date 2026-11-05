@@ -194,7 +194,7 @@ th, td { padding: 8px 12px; }
 .signal .kv { margin-top: 4px; }
 
 .feed { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
-.feed > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .feed > :nth-child(3) { grid-column: 2; grid-row: 1; }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }

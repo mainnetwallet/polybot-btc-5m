@@ -308,20 +308,53 @@ function renderSignal(p, f, regime, market) {
   ]);
 }
 
+/* Feed rows are built once per feed and then updated in place: only the price text changes on
+   each push (no age/ms), and the DOM is touched only when a value actually changed. */
+const feedRows = new Map();
+
+function setNodeText(node, value) {
+  if (node.textContent !== value) node.textContent = value;
+}
+
+function feedPrice(feed) {
+  const raw = feed.last_value;
+  if (raw === null || raw === undefined || raw === "") return "no value";
+  const n = Number(raw);
+  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(raw);
+}
+
 function renderFeeds(feeds) {
   const node = $("feeds");
-  clear(node);
-  if (!feeds || !feeds.length) { node.appendChild(el("div", "muted small", "no feed status")); return; }
+  if (!feeds || !feeds.length) {
+    feedRows.clear();
+    clear(node);
+    node.appendChild(el("div", "muted small", "no feed status"));
+    return;
+  }
+  const names = new Set(feeds.map((f) => f.name));
+  for (const [name, r] of feedRows) {
+    if (!names.has(name)) { r.row.remove(); feedRows.delete(name); }
+  }
+  if (!feedRows.size) clear(node); // drop the "no feed status" placeholder
   for (const feed of feeds) {
-    const row = el("div", "feed");
-    row.appendChild(el("span", null, feed.name));
-    const lv = Number(feed.last_value);
-    const shown = feed.last_value === null || feed.last_value === undefined || feed.last_value === "" ? "no value" : (Number.isFinite(lv) ? lv.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(feed.last_value));
-    row.appendChild(el("span", "muted", shown + (feed.age_ms !== undefined ? "  ·  " + Math.max(0, Math.round(feed.age_ms)) + " ms ago" : "")));
-    const pill = el("span", "pill " + feed.health, feed.health);
-    row.appendChild(pill);
-    if (feed.detail) row.title = feed.detail;
-    node.appendChild(row);
+    let r = feedRows.get(feed.name);
+    if (!r) {
+      const row = el("div", "feed");
+      row.appendChild(el("span", null, feed.name));
+      const price = el("span", "muted", "");
+      const pill = el("span", "pill", "");
+      row.appendChild(price);
+      row.appendChild(pill);
+      node.appendChild(row);
+      r = { row, price, pill };
+      feedRows.set(feed.name, r);
+    }
+    setNodeText(r.price, feedPrice(feed));
+    const cls = "pill " + feed.health;
+    if (r.pill.className !== cls) r.pill.className = cls;
+    setNodeText(r.pill, String(feed.health));
+    const tip = feed.detail || "";
+    if (r.row.title !== tip) r.row.title = tip;
   }
 }
 
