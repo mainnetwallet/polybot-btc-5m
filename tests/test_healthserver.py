@@ -290,3 +290,219 @@ def test_supervisor_clears_stale_stop_file(settings, monkeypatch):
     sup = _fast_supervisor(settings, monkeypatch)
     assert sup.run() == 0
     assert not stop.exists()
+
+
+# ------------------------------------------------------------------ dashboard proxy
+import threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+
+@pytest.fixture
+def fake_dashboard():
+    """A stand-in for the loopback dashboard: echoes requests, and speaks a toy WebSocket upgrade."""
+    seen: list[dict] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _reply(self, status: int, body: bytes, ctype: str = "text/html") -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "polybot_session=abc; HttpOnly")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802
+            seen.append({"method": "GET", "path": self.path, "host": self.headers.get("Host"),
+                         "cookie": self.headers.get("Cookie")})
+            if self.path.startswith("/api/stream"):
+                self.send_response(101, "Switching Protocols")
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.end_headers()
+                self.wfile.flush()
+                while True:
+                    data = self.request.recv(1024)
+                    if not data:
+                        return
+                    self.request.sendall(data.upper())
+            self._reply(200, b"<html>dashboard</html>")
+
+        do_HEAD = do_GET  # noqa: N815
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            seen.append({"method": "POST", "path": self.path, "body": raw,
+                         "csrf": self.headers.get("X-CSRF-Token")})
+            self._reply(200, raw, "application/json")
+
+        def log_message(self, *a):  # noqa: D401
+            return
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield httpd.server_address[1], seen
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def _proxy_server(upstream_port: int) -> HealthServer:
+    server = HealthServer(
+        "127.0.0.1", 0, HealthMonitor(_snap(), _lease()), upstream=("127.0.0.1", upstream_port)
+    )
+    assert server.start()
+    return server
+
+
+def test_proxy_serves_dashboard_at_root_and_keeps_health_local(fake_dashboard):
+    upstream_port, seen = fake_dashboard
+    server = _proxy_server(upstream_port)
+    try:
+        status, headers, body = _request(server.bound_port, "GET", "/")
+        assert (status, body) == (200, b"<html>dashboard</html>")
+        assert "polybot_session" in headers.get("Set-Cookie", "")
+
+        status, _, body = _request(server.bound_port, "GET", "/static/app.js?v=1")
+        assert status == 200 and seen[-1]["path"] == "/static/app.js?v=1"
+
+        # Health stays answered locally and never reaches the dashboard.
+        before = len(seen)
+        for path in ("/healthz", "/healthz/", "/health"):
+            status, _, body = _request(server.bound_port, "GET", path)
+            assert status == 200
+            assert json.loads(body)["service"] == "polybot"
+        assert len(seen) == before
+
+        # HEAD is proxied too.
+        status, _, body = _request(server.bound_port, "HEAD", "/")
+        assert status == 200 and body == b""
+    finally:
+        server.stop()
+
+
+def test_proxy_forwards_post_body_headers_and_host(fake_dashboard):
+    upstream_port, seen = fake_dashboard
+    server = _proxy_server(upstream_port)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.bound_port, timeout=5)
+        payload = json.dumps({"username": "admin", "password": "p"}).encode()
+        conn.request(
+            "POST",
+            "/api/login",
+            body=payload,
+            headers={"Content-Type": "application/json", "X-CSRF-Token": "tok", "Host": "bot.example.com"},
+        )
+        resp = conn.getresponse()
+        assert resp.status == 200 and resp.read() == payload
+        conn.close()
+        post = [r for r in seen if r["method"] == "POST"][-1]
+        assert post["body"] == payload and post["csrf"] == "tok"
+
+        conn = http.client.HTTPConnection("127.0.0.1", server.bound_port, timeout=5)
+        conn.request("GET", "/api/state", headers={"Host": "bot.example.com", "Cookie": "polybot_session=abc"})
+        conn.getresponse().read()
+        conn.close()
+        get = [r for r in seen if r["method"] == "GET"][-1]
+        # The dashboard's WebSocket origin check compares Origin to the *original* Host.
+        assert get["host"] == "bot.example.com" and get["cookie"] == "polybot_session=abc"
+    finally:
+        server.stop()
+
+
+def test_proxy_relays_websocket_upgrade(fake_dashboard):
+    upstream_port, _ = fake_dashboard
+    server = _proxy_server(upstream_port)
+    try:
+        with socket.create_connection(("127.0.0.1", server.bound_port), timeout=5) as sock:
+            sock.sendall(
+                b"GET /api/stream HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+                b"Connection: Upgrade\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            )
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                buf += sock.recv(1024)
+            assert buf.startswith(b"HTTP/1.1 101")
+            sock.sendall(b"ping")
+            assert sock.recv(1024) == b"PING"
+    finally:
+        server.stop()
+
+
+def test_proxy_returns_502_when_dashboard_is_down():
+    port = _free_port()  # nothing listens here
+    server = _proxy_server(port)
+    try:
+        status, _, body = _request(server.bound_port, "GET", "/")
+        assert status == 502
+        assert json.loads(body) == {"status": "dashboard_unavailable"}
+        assert _request(server.bound_port, "GET", "/healthz")[0] == 200
+    finally:
+        server.stop()
+
+
+def test_proxy_rejects_oversized_and_chunked_bodies(fake_dashboard):
+    from btc5m_bot.healthserver import PROXY_MAX_BODY_BYTES
+
+    upstream_port, seen = fake_dashboard
+    server = _proxy_server(upstream_port)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.bound_port, timeout=5)
+        conn.putrequest("POST", "/api/login")
+        conn.putheader("Content-Length", str(PROXY_MAX_BODY_BYTES + 1))
+        conn.endheaders()
+        assert conn.getresponse().status == 413
+        conn.close()
+
+        conn = http.client.HTTPConnection("127.0.0.1", server.bound_port, timeout=5)
+        conn.putrequest("POST", "/api/login")
+        conn.putheader("Transfer-Encoding", "chunked")
+        conn.endheaders()
+        assert conn.getresponse().status == 501
+        conn.close()
+        assert not [r for r in seen if r["method"] == "POST"]
+    finally:
+        server.stop()
+
+
+def test_without_upstream_root_is_liveness_and_post_is_405(running_server):
+    server = running_server(HealthMonitor(_snap(), _lease()))
+    assert _request(server.bound_port, "GET", "/")[0] == 200
+    assert _request(server.bound_port, "POST", "/api/login")[0] == 405
+
+
+def test_public_dashboard_enabled_resolution(settings, monkeypatch):
+    monkeypatch.delenv("RENDER", raising=False)
+    assert settings.public_dashboard_enabled is False  # automatic mode is Render-only
+    monkeypatch.setenv("RENDER", "true")
+    assert settings.public_dashboard_enabled is True
+    assert settings.model_copy(update={"public_dashboard": False}).public_dashboard_enabled is False
+    # Never without a password hash, even if explicitly requested.
+    bare = settings.model_copy(update={"dashboard_password_hash": None, "public_dashboard": True})
+    assert bare.public_dashboard_enabled is False
+    monkeypatch.delenv("RENDER", raising=False)
+    assert settings.model_copy(update={"public_dashboard": True}).public_dashboard_enabled is True
+
+
+def test_supervisor_proxies_dashboard_on_the_public_port(settings, monkeypatch, fake_dashboard):
+    upstream_port, _ = fake_dashboard
+    port = _free_port()
+    settings = settings.model_copy(
+        update={"health_host": "127.0.0.1", "health_port": port, "port": upstream_port, "public_dashboard": True}
+    )
+    seen: dict[str, tuple[int, bytes]] = {}
+
+    def probe(_sup):
+        for path in ("/", "/healthz"):
+            status, _, body = _request(port, "GET", path)
+            seen[path] = (status, body)
+
+    sup = _fast_supervisor(settings, monkeypatch, on_sleep=probe)
+    assert sup.run() == 0
+    assert seen["/"] == (200, b"<html>dashboard</html>")
+    assert seen["/healthz"][0] == 200

@@ -200,10 +200,15 @@ The supervisor writes `data\STOP`, shuts the heartbeat worker down first, then t
 ## Deploy on Render (PAPER) with UptimeRobot
 
 `render.yaml` is a Render Blueprint: one web service in PAPER mode on Render's **free** plan. It is
-a *web* service only so that Render and UptimeRobot have something to call. The operator dashboard
-is **not** exposed and still binds loopback only. The single public listener is
-`btc5m_bot/healthserver.py`, which returns status codes and short reason codes, never trading
-state or secrets.
+a *web* service, and Render gives it a single public port. That port is served by
+`btc5m_bot/healthserver.py`: `/healthz` and `/health` are answered locally with status codes and
+short reason codes (never trading state or secrets), and **every other path is proxied to the
+operator dashboard**, which still binds loopback only and keeps its own login (PBKDF2 password,
+signed session cookie, CSRF, login lockout). So `https://<your-service>.onrender.com/` opens the
+dashboard. The proxy is on automatically on Render once `POLYBOT_DASHBOARD_PASSWORD_HASH` is set;
+set `POLYBOT_PUBLIC_DASHBOARD=false` to go back to health-only. Use a long, unique dashboard
+password: the dashboard is internet-facing in this mode (LIVE trading still needs the full gate
+and the typed activation phrase).
 
 1. In Render choose **New > Blueprint** and select this repo (or use the Render API/MCP). Deploys
    are manual (`autoDeployTrigger: "off"`), so the bot only restarts when you decide.

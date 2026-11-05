@@ -308,6 +308,23 @@ class Settings(BaseSettings):
     health_host: str = "0.0.0.0"
     health_port: int | None = Field(default=None, ge=1, le=65535)
     health_max_lease_age_seconds: float = Field(default=60.0, gt=0)
+    # Serve the (password-protected) operator dashboard through the public listener by proxying
+    # it to the loopback dashboard. None = automatic: on when running on Render AND a dashboard
+    # password hash is configured. POLYBOT_PUBLIC_DASHBOARD=false forces health-only.
+    public_dashboard: bool | None = None
+
+    @property
+    def public_dashboard_enabled(self) -> bool:
+        """True when the public listener should proxy non-health paths to the dashboard.
+
+        Never on without a dashboard password hash: the dashboard is the only thing standing
+        between the internet and the operator controls.
+        """
+        if self.dashboard_password_hash is None:
+            return False
+        if self.public_dashboard is not None:
+            return self.public_dashboard
+        return bool(os.environ.get("RENDER"))
 
     @property
     def health_listen_port(self) -> int | None:

@@ -20,12 +20,23 @@ Endpoints
     Readiness (deep). 200 only when the supervisor loop is running, the engine child process is
     alive and its liveness lease in SQLite is fresh. Otherwise 503 with a short ``reason`` code.
     Point UptimeRobot here so you are alerted when the engine is down or wedged.
+
+Optional dashboard proxy
+------------------------
+On a host where only one public port exists (Render), the operator dashboard would be
+unreachable. When an ``upstream`` is given, every path except ``/healthz`` and ``/health`` is
+relayed byte-for-byte (HTTP and WebSocket upgrade) to the loopback dashboard. The dashboard keeps
+doing its own authentication (password, signed session cookie, CSRF, login lockout); this
+module adds no auth surface and no trading state of its own, and the dashboard still binds to
+loopback only. ``/`` then belongs to the dashboard; liveness stays on ``/healthz``.
 """
 from __future__ import annotations
 
 import contextlib
 import json
 import logging
+import selectors
+import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -39,6 +50,30 @@ log = logging.getLogger(__name__)
 SERVICE_NAME = "polybot"
 LIVENESS_PATHS = frozenset({"/", "/healthz"})
 READINESS_PATHS = frozenset({"/health"})
+# Paths that are always answered locally, even when the dashboard proxy is on.
+ALWAYS_LOCAL_PATHS = frozenset({"/healthz", "/health"})
+
+# Dashboard proxy limits. The dashboard only ever receives small JSON bodies.
+PROXY_MAX_BODY_BYTES = 1024 * 1024
+PROXY_MAX_CONCURRENT = 32
+PROXY_CONNECT_TIMEOUT_SECONDS = 3.0
+PROXY_IO_TIMEOUT_SECONDS = 60.0
+# The dashboard pushes over its WebSocket at least every ~2 s, so a long silence means a dead peer.
+PROXY_WS_IDLE_SECONDS = 120.0
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+    }
+)
 
 # The supervisor refreshes its snapshot every couple of seconds. If the snapshot is older than
 # this, the supervisor loop itself is wedged.
@@ -172,7 +207,11 @@ class HealthMonitor:
         return 503, payload
 
 
-def _make_handler(monitor: HealthMonitor) -> type[BaseHTTPRequestHandler]:
+def _make_handler(
+    monitor: HealthMonitor, upstream: "tuple[str, int] | None" = None
+) -> type[BaseHTTPRequestHandler]:
+    proxy_slots = threading.BoundedSemaphore(PROXY_MAX_CONCURRENT)
+
     class _Handler(BaseHTTPRequestHandler):
         server_version = "polybot-health"
         sys_version = ""
@@ -192,10 +231,102 @@ def _make_handler(monitor: HealthMonitor) -> type[BaseHTTPRequestHandler]:
             if body:
                 self.wfile.write(data)
 
+        def _proxy(self) -> None:
+            """Relay this request to the loopback dashboard (HTTP, or a WebSocket upgrade)."""
+            assert upstream is not None
+            if self.headers.get("Transfer-Encoding"):
+                self._send(501, {"status": "not_implemented"}, body=True)
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0:
+                self._send(400, {"status": "bad_request"}, body=True)
+                return
+            if length > PROXY_MAX_BODY_BYTES:
+                self._send(413, {"status": "payload_too_large"}, body=True)
+                return
+            if not proxy_slots.acquire(blocking=False):
+                self._send(503, {"status": "busy"}, body=True)
+                return
+            try:
+                self._proxy_locked(length)
+            finally:
+                proxy_slots.release()
+
+        def _proxy_locked(self, length: int) -> None:
+            assert upstream is not None
+            upgrade = (
+                "upgrade" in self.headers.get("Connection", "").lower()
+                and self.headers.get("Upgrade", "").lower() == "websocket"
+            )
+            payload = self.rfile.read(length) if length else b""
+            lines = [f"{self.command} {self.path} HTTP/1.1"]
+            for key, value in self.headers.items():
+                lowered = key.lower()
+                if lowered in _HOP_BY_HOP and not (upgrade and lowered == "upgrade"):
+                    continue
+                lines.append(f"{key}: {value}")
+            lines.append("Connection: Upgrade" if upgrade else "Connection: close")
+            if payload or self.command in ("POST", "PUT", "PATCH"):
+                lines.append(f"Content-Length: {len(payload)}")
+            try:
+                head = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
+            except UnicodeEncodeError:
+                self._send(400, {"status": "bad_request"}, body=True)
+                return
+            try:
+                remote = socket.create_connection(upstream, timeout=PROXY_CONNECT_TIMEOUT_SECONDS)
+            except OSError:
+                self._send(502, {"status": "dashboard_unavailable"}, body=True)
+                return
+            self.close_connection = True
+            client = self.connection
+            try:
+                with remote:
+                    remote.settimeout(PROXY_IO_TIMEOUT_SECONDS)
+                    client.settimeout(PROXY_IO_TIMEOUT_SECONDS)
+                    remote.sendall(head + payload)
+                    if upgrade:
+                        self._relay(client, remote)
+                    else:
+                        while True:
+                            chunk = remote.recv(65536)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+            except (OSError, ValueError):
+                # Peer went away or timed out mid-stream. Nothing useful left to send.
+                log.debug("dashboard proxy stream ended", exc_info=True)
+
+        @staticmethod
+        def _relay(client: socket.socket, remote: socket.socket) -> None:
+            """Pump bytes both ways until either side closes or the link goes idle."""
+            with selectors.DefaultSelector() as selector:
+                selector.register(client, selectors.EVENT_READ, remote)
+                selector.register(remote, selectors.EVENT_READ, client)
+                while True:
+                    events = selector.select(timeout=PROXY_WS_IDLE_SECONDS)
+                    if not events:
+                        return
+                    for key, _ in events:
+                        data = key.fileobj.recv(65536)  # type: ignore[union-attr]
+                        if not data:
+                            return
+                        key.data.sendall(data)
+
         def _route(self, *, body: bool) -> None:
             path = self.path.split("?", 1)[0].split("#", 1)[0]
             if len(path) > 1:
                 path = path.rstrip("/")
+            if upstream is not None and path not in ALWAYS_LOCAL_PATHS:
+                try:
+                    self._proxy()
+                except Exception:  # noqa: BLE001 - never leak internals to a public listener
+                    log.exception("dashboard proxy failed")
+                    self.close_connection = True
+                return
             try:
                 if path in LIVENESS_PATHS:
                     status, payload = monitor.liveness()
@@ -214,10 +345,16 @@ def _make_handler(monitor: HealthMonitor) -> type[BaseHTTPRequestHandler]:
         def do_HEAD(self) -> None:  # noqa: N802
             self._route(body=False)
 
-        def _not_allowed(self) -> None:
-            self._send(405, {"status": "method_not_allowed"}, body=True, allow="GET, HEAD")
+        def _other_method(self) -> None:
+            path = self.path.split("?", 1)[0].split("#", 1)[0]
+            if len(path) > 1:
+                path = path.rstrip("/")
+            if upstream is not None and path not in ALWAYS_LOCAL_PATHS:
+                self._route(body=True)
+            else:
+                self._send(405, {"status": "method_not_allowed"}, body=True, allow="GET, HEAD")
 
-        do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _not_allowed  # noqa: N815
+        do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _other_method  # noqa: N815
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             # Monitors poll every few seconds; keep access noise out of the structured logs.
@@ -229,10 +366,17 @@ def _make_handler(monitor: HealthMonitor) -> type[BaseHTTPRequestHandler]:
 class HealthServer:
     """Owns the listener thread. ``start()`` returns False instead of raising on bind failure."""
 
-    def __init__(self, host: str, port: int, monitor: HealthMonitor) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        monitor: HealthMonitor,
+        upstream: "tuple[str, int] | None" = None,
+    ) -> None:
         self.host = host
         self.port = port
         self._monitor = monitor
+        self._upstream = upstream
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -242,7 +386,7 @@ class HealthServer:
 
     def start(self) -> bool:
         try:
-            httpd = ThreadingHTTPServer((self.host, self.port), _make_handler(self._monitor))
+            httpd = ThreadingHTTPServer((self.host, self.port), _make_handler(self._monitor, self._upstream))
         except OSError as exc:
             log.error("health server could not bind %s:%s: %s", self.host, self.port, exc)
             return False
@@ -255,7 +399,15 @@ class HealthServer:
             daemon=True,
         )
         self._thread.start()
-        log.info("health server listening on %s:%s (/healthz, /health)", self.host, httpd.server_address[1])
+        if self._upstream is not None:
+            log.info(
+                "public listener on %s:%s: /healthz, /health, dashboard proxied to %s:%s",
+                self.host,
+                httpd.server_address[1],
+                *self._upstream,
+            )
+        else:
+            log.info("health server listening on %s:%s (/healthz, /health)", self.host, httpd.server_address[1])
         return True
 
     def stop(self) -> None:

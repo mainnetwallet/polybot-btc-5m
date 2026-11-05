@@ -113,7 +113,10 @@ class Supervisor:
             log.error("health port %s collides with the dashboard port; health server not started", port)
             return
         monitor = HealthMonitor(self.health_snapshot, make_lease_check(self.settings))
-        server = HealthServer(self.settings.health_host, port, monitor)
+        # On Render the health port is the only public port, so the password-protected dashboard
+        # is reached through it (proxied to the loopback dashboard). Health paths stay local.
+        upstream = (self.settings.host, self.settings.port) if self.settings.public_dashboard_enabled else None
+        server = HealthServer(self.settings.health_host, port, monitor, upstream)
         # A health listener problem must never stop the trading supervisor.
         if server.start():
             self._health_server = server

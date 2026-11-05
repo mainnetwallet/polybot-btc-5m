@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -23,6 +24,9 @@ from ..security import redact
 from .auth import CSRF_HEADER, SESSION_COOKIE, AuthError, AuthManager, Session
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+# A Host header is only echoed into the CSP when it is a plain host[:port].
+_HOST_RE = re.compile(r"[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?")
 
 CONFIG_WRITABLE = {
     "capital_usd",
@@ -108,9 +112,14 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
     @app.middleware("http")
     async def _headers(request: Request, call_next):  # type: ignore[no-untyped-def]
         response = await call_next(request)
+        # Some browsers do not treat 'self' as covering ws:/wss: for the page's own host, which
+        # would block the live stream when the dashboard is reached through a public hostname.
+        host = request.headers.get("host", "")
+        own_ws = f" ws://{host} wss://{host}" if _HOST_RE.fullmatch(host) else ""
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-            "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            f"connect-src 'self' ws://127.0.0.1:* ws://localhost:*{own_ws}; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -162,7 +171,8 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
             max_age=settings.session_max_age_seconds,
             httponly=True,
             samesite="strict",
-            secure=False,
+            # Plain http on loopback, https when reached through the public (Render) hostname.
+            secure=request.url.scheme == "https",
             path="/",
         )
         repo.audit("LOGIN", actor=_client_ip(request))

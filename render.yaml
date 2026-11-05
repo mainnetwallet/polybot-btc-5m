@@ -1,10 +1,12 @@
 # Render Blueprint for POLYBOT (PAPER mode), FREE plan.
 #
-# Runs as a web service ONLY so that Render (and UptimeRobot) can reach a health endpoint. The
-# operator dashboard is still bound to loopback by design (the engine refuses any other host), so
-# it is NOT exposed. The only public surface is the tiny health listener in btc5m_bot/healthserver.py
-# (GET/HEAD /healthz and /health; no trading state, no secrets). It binds Render's injected PORT
-# (the code reads PORT when RENDER is set).
+# Runs as a web service. Render exposes ONE public port, served by the tiny listener in
+# btc5m_bot/healthserver.py (it binds Render's injected PORT; the code reads PORT when RENDER is
+# set). That listener answers /healthz and /health itself (no trading state, no secrets) and
+# proxies everything else to the operator dashboard, which still binds loopback only (the engine
+# refuses any other host) and enforces its own login (password, session cookie, CSRF, lockout).
+# Open https://<your-service>.onrender.com/ to use the dashboard. Set POLYBOT_PUBLIC_DASHBOARD to
+# "false" to expose the health endpoints only.
 # Mode stays PAPER: config/runtime.json is created with the default mode on first start, and LIVE
 # still requires the 23-condition gate plus the typed activation phrase.
 #
@@ -19,8 +21,8 @@
 # FREE plan limits that matter here (see https://render.com/docs/free):
 #   * No persistent disk. The SQLite database, approved rules, paper trades, recordings and
 #     runtime.json live under /tmp/polybot and are lost on every restart, redeploy and spin-down.
-#   * No Shell/SSH, and the dashboard is not exposed, so operator commands (approve-rule, status,
-#     backup) cannot be run. Until a rule is approved and capital_usd is set the bot records
+#   * No Shell/SSH, so CLI operator commands (approve-rule, status, backup) cannot be run; use the
+#     dashboard instead. Until a rule is approved and capital_usd is set the bot records
 #     NO TRADE: it collects data and reports health, but does not paper-trade.
 #   * Idle services spin down after 15 minutes without inbound traffic. An UptimeRobot monitor
 #     keeps it awake, but the 750 free instance hours per month are shared by ALL free web
@@ -62,6 +64,9 @@ services:
         value: /tmp/polybot/config
       - key: POLYBOT_HEARTBEAT_ENABLED
         value: "false"
+      # Serve the dashboard on the public port (login-protected). "false" = health endpoints only.
+      - key: POLYBOT_PUBLIC_DASHBOARD
+        value: "true"
       - key: POLYBOT_DASHBOARD_PASSWORD_HASH
         sync: false
       - key: POLYBOT_SESSION_SECRET

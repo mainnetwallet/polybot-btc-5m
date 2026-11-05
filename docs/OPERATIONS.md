@@ -33,20 +33,28 @@ crash-loop protection and stops the supervisor. The engine lease becomes stale o
 so the heartbeat worker cannot send until the new engine renews it.
 
 Dashboard: <http://127.0.0.1:8765>. The engine refuses to bind a non-loopback host.
-`GET /api/health` is unauthenticated but reachable only from loopback.
+`GET /api/health` is unauthenticated; it is reachable only from loopback unless the Render dashboard proxy below is on.
 
 ## Health endpoints (Render, UptimeRobot)
 
-The dashboard is never exposed. For hosting, the supervisor can run one extra, tiny listener
-(`btc5m_bot/healthserver.py`, a daemon thread, stdlib only). It is off unless `POLYBOT_HEALTH_PORT`
-is set, or the process runs on Render (`RENDER` is set and Render injects `PORT`). It answers
-`GET` and `HEAD` only and returns fixed status codes and short reason codes: no trading state, no
-secrets, no internal error text. If it cannot bind its port it logs an error and the bot keeps
-running.
+The dashboard itself always binds loopback. For hosting, the supervisor can run one extra, tiny
+listener (`btc5m_bot/healthserver.py`, a daemon thread, stdlib only). It is off unless
+`POLYBOT_HEALTH_PORT` is set, or the process runs on Render (`RENDER` is set and Render injects
+`PORT`). Its own endpoints answer with fixed status codes and short reason codes: no trading
+state, no secrets, no internal error text. If it cannot bind its port it logs an error and the
+bot keeps running.
+
+**Dashboard proxy.** With `POLYBOT_PUBLIC_DASHBOARD=true`, or automatically on Render when a
+dashboard password hash is set (`false` disables it), the listener relays every path except
+`/healthz` and `/health` (HTTP and the `/api/stream` WebSocket) to the loopback dashboard. The
+proxy adds no authentication of its own: the dashboard's login, session cookie, CSRF check and
+lockout apply unchanged, and it is never enabled without a password hash. In this mode `/`
+belongs to the dashboard; use `/healthz` for liveness. If the engine's dashboard is not up yet
+the proxy answers 502 `dashboard_unavailable`.
 
 | Path | Meaning | Status |
 |---|---|---|
-| `/healthz` (also `/`) | liveness: the supervisor process is serving | always 200 |
+| `/healthz` (also `/` unless the dashboard proxy is on) | liveness: the supervisor process is serving | always 200 |
 | `/health` | readiness: supervisor `RUNNING`, engine process alive, engine lease fresh | 200, otherwise 503 with `reason` |
 
 `reason` is one of `supervisor_not_running`, `supervisor_stalled`, `supervisor_unavailable`,
