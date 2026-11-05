@@ -259,6 +259,9 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # An empty "POLYBOT_X=" line means "not set". Without this it loads as an empty
+        # string, so the "is None" guards (e.g. the dashboard password check) never fire.
+        env_ignore_empty=True,
     )
 
     project_root: Path = BASE_DIR

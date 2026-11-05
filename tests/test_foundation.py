@@ -113,3 +113,63 @@ def test_auth_requires_configured_password(tmp_path):
     bare = Settings(project_root=tmp_path, dashboard_password_hash=None)
     with pytest.raises(Exception):
         AuthManager(bare)
+
+
+# --- .env handling -----------------------------------------------------------------------
+
+def _clean_polybot_env(monkeypatch):
+    import os
+
+    for key in [k for k in os.environ if k.upper().startswith("POLYBOT_")]:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_empty_env_values_load_as_unset(tmp_path, monkeypatch):
+    """A blank "POLYBOT_X=" line must mean "not set", not an empty secret."""
+    from btc5m_bot.api.auth import AuthError
+    from btc5m_bot.config import Settings
+
+    _clean_polybot_env(monkeypatch)
+    env = tmp_path / ".env"
+    env.write_text(
+        "POLYBOT_DASHBOARD_PASSWORD_HASH=\nPOLYBOT_SESSION_SECRET=\nPOLYBOT_PRIVATE_KEY=\n"
+        "POLYBOT_CLOB_API_KEY=\nPOLYBOT_FUNDER_ADDRESS=\n",
+        encoding="utf-8",
+    )
+    s = Settings(_env_file=env, project_root=tmp_path)
+    assert s.dashboard_password_hash is None
+    assert s.session_secret is None
+    assert s.private_key is None
+    assert s.clob_api_key is None
+    assert s.funder_address is None
+    # the startup guard with the helpful message now fires instead of being bypassed
+    with pytest.raises(AuthError):
+        AuthManager(s)
+
+
+def test_env_example_is_consistent_with_settings(tmp_path, monkeypatch):
+    """Every active key in .env.example is a real setting, defined once, with a value."""
+    from pathlib import Path
+
+    from btc5m_bot.config import BASE_DIR, Settings
+
+    _clean_polybot_env(monkeypatch)
+    example = Path(BASE_DIR) / ".env.example"
+    keys = []
+    for line in example.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        assert value.strip(), f"{key} has an empty value; comment it out instead"
+        keys.append(key.strip())
+
+    assert len(keys) == len(set(keys)), "duplicate keys in .env.example"
+    fields = set(Settings.model_fields)
+    for key in keys:
+        assert key.startswith("POLYBOT_") and key[len("POLYBOT_"):].lower() in fields, f"unknown setting {key}"
+
+    # loading the example as-is leaves every secret unset
+    s = Settings(_env_file=example, project_root=tmp_path)
+    for name in ("dashboard_password_hash", "session_secret", "private_key", "clob_api_key", "clob_api_secret", "clob_api_passphrase", "funder_address"):
+        assert getattr(s, name) is None, name
