@@ -1595,8 +1595,12 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
     config_store = ConfigStore(settings.runtime_config_file)
     clock = RealClock()
     adapter = PolymarketAdapter(settings)
-    feeds = {"binance": __import__("btc5m_bot.data.btc_feeds", fromlist=["feed_from_name"]).feed_from_name("binance"),
-             "coinbase": __import__("btc5m_bot.data.btc_feeds", fromlist=["feed_from_name"]).feed_from_name("coinbase")}
+    from .data.btc_feeds import feed_from_name
+
+    feeds = {
+        "binance": feed_from_name("binance", settings.binance_ws),
+        "coinbase": feed_from_name("coinbase", settings.coinbase_ws),
+    }
     oracle = PolyBoltTwapFeed(settings)
     from .data.recorder import ParquetRecorder
 
