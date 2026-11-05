@@ -5,7 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .env
-data/
+/data/
 logs/
 config/runtime.json
 config/live.flag
