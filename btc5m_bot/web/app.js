@@ -185,11 +185,35 @@ function liveMarket(m) {
   });
 }
 
+/* The uptime badge has exactly ONE writer. It used to be written from two places with different
+   time bases (a 100 ms local tick from started_at, and every push from the engine's rounded
+   uptime_seconds), so it flipped between two values and widths on every update. Now it counts
+   from started_at, never steps backwards when the clock offset jitters between pushes, and
+   only touches the DOM when the visible text changes. */
+let uptimeStartedAt = null;
+let uptimeShown = 0;
+
+function renderUptime() {
+  if (!lastState) return;
+  const started = Date.parse(lastState.started_at);
+  let secs;
+  if (Number.isFinite(started)) {
+    secs = Math.max(0, Math.floor((serverNowMs() - started) / 1000));
+    if (started !== uptimeStartedAt) { uptimeStartedAt = started; uptimeShown = secs; } // first sample or engine restart
+    else uptimeShown = Math.max(uptimeShown, secs);
+  } else {
+    // started_at not known yet: fall back to the engine's own figure
+    uptimeShown = Math.max(0, Math.floor(Number(lastState.uptime_seconds) || 0));
+  }
+  const label = uptimeShown + "s uptime";
+  const node = $("badge-uptime");
+  if (node.textContent !== label) node.textContent = label;
+}
+
 function tickClock() {
   if (!lastState || $("app").classList.contains("hidden")) return;
   $("server-time").textContent = "server " + new Date(serverNowMs()).toISOString().replace("T", " ").slice(0, 19) + "Z";
-  const started = Date.parse(lastState.started_at);
-  if (Number.isFinite(started)) $("badge-uptime").textContent = Math.max(0, Math.floor((serverNowMs() - started) / 1000)) + "s uptime";
+  renderUptime();
   if (lastState.market) renderMarket(liveMarket(lastState.market));
 }
 setInterval(tickClock, 100);
@@ -204,7 +228,7 @@ function renderState(s, serverTime) {
   badge($("badge-mode"), mode, mode === "LIVE" ? "bad" : "warn");
   badge($("badge-health"), s.engine_healthy ? "ENGINE OK" : "ENGINE DOWN", s.engine_healthy ? "ok" : "bad");
   badge($("badge-live"), s.live_locked ? "LIVE LOCKED" : "LIVE ARMED", s.live_locked ? "ghost" : "bad");
-  badge($("badge-uptime"), text(s.uptime_seconds, 0) + "s uptime", "ghost");
+  renderUptime();
   $("server-time").textContent = serverTime ? "server " + serverTime.replace("T", " ").slice(0, 19) + "Z" : "";
   $("status-line").textContent = [
     s.detail || "running",
