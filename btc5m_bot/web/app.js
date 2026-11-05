@@ -323,12 +323,19 @@ function feedPrice(feed) {
   return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(raw);
 }
 
-function renderFeeds(feeds) {
+/* Polymarket resolves BTC 5m markets on Chainlink, so Chainlink is the only feed shown here.
+   The spot feeds (binance/coinbase) still run inside the engine; they are just not displayed. */
+function isChainlinkFeed(feed) {
+  return /chainlink/i.test(String(feed && feed.name));
+}
+
+function renderFeeds(allFeeds) {
   const node = $("feeds");
-  if (!feeds || !feeds.length) {
+  const feeds = (allFeeds || []).filter(isChainlinkFeed);
+  if (!feeds.length) {
     feedRows.clear();
     clear(node);
-    node.appendChild(el("div", "muted small", "no feed status"));
+    node.appendChild(el("div", "muted small", "no Chainlink feed status"));
     return;
   }
   const names = new Set(feeds.map((f) => f.name));
