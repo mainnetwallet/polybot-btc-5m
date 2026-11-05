@@ -39,6 +39,115 @@ Changing them raises `HardLimitError`. The dashboard cannot write them.
 
 ---
 
+## Complete setup guide (step by step)
+
+This walks you from a fresh Windows PC to a running PAPER bot. Nothing here enables LIVE trading.
+
+### 0. Prerequisites
+
+- Windows 10/11
+- Python **3.11+** from [python.org](https://www.python.org/downloads/) (tick **Add python.exe to PATH** in the installer)
+- Git
+
+### 1. Clone the repository
+
+```bat
+git clone https://github.com/mainnetwallet/polybot-btc-5m.git
+cd polybot-btc-5m
+```
+
+If the repository is private, authenticate with `gh auth login` or a Git credential manager.
+Never paste a personal access token into a chat, an issue, or a commit.
+
+### 2. Run setup
+
+```bat
+setup.bat
+```
+
+This creates `.venv`, installs dependencies, copies `.env.example` to `.env`, and initialises
+the SQLite database and `config\runtime.json` (mode `PAPER`).
+
+### 3. Create dashboard credentials
+
+```bat
+.venv\Scripts\python.exe -m btc5m_bot hash-password
+```
+
+Paste the two generated lines into `.env`:
+
+```text
+POLYBOT_DASHBOARD_PASSWORD_HASH=...
+POLYBOT_SESSION_SECRET=...
+```
+
+You log in with username `admin` (`POLYBOT_DASHBOARD_USERNAME`) and the password you typed
+when generating the hash.
+
+### 4. Configure `.env`
+
+| Variable | Needed in PAPER? | Notes |
+|---|---|---|
+| `POLYBOT_DASHBOARD_PASSWORD_HASH`, `POLYBOT_SESSION_SECRET` | Yes | From step 3 |
+| `POLYBOT_PRIVATE_KEY` **or** the three `POLYBOT_CLOB_API_*` values | Only to verify the Chainlink oracle | Without them the oracle is `UNVERIFIED` and the bot records NO TRADE while still collecting data |
+| `POLYBOT_SIGNATURE_TYPE`, `POLYBOT_FUNDER_ADDRESS` | Only for LIVE | Leave defaults for PAPER |
+| `POLYBOT_HEARTBEAT_ENABLED` | No | Keep `false`. Never arm the heartbeat during development |
+| `POLYBOT_HEARTBEAT_DEDICATED_KEY_CONFIRMED` | No | Keep `false` |
+| Endpoint URLs (`POLYBOT_GAMMA_URL`, ...) | No | Leave as in `.env.example` |
+
+If you supply a private key, use a **dedicated wallet created only for this bot**, holding no
+funds while you are in PAPER. Never use your main wallet's key.
+
+### 5. Set allocated capital
+
+Edit `config\runtime.json` and replace `"capital_usd": null` with a number, for example:
+
+```json
+"capital_usd": 100
+```
+
+This is the capital the risk limits are computed from (2% planned loss per trade, 4% daily
+loss), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` and does not trade.
+
+### 6. Start the bot
+
+```bat
+start.bat
+```
+
+Open <http://127.0.0.1:8765> and log in. Leave the window open; press `Ctrl+C` or run
+`stop.bat` from another terminal to shut down gracefully.
+
+### 7. Approve the resolution rule
+
+Open the **Rules** tab, compare each fingerprint's rule text with the live market metadata,
+and approve only what you have verified:
+
+```bat
+.venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
+```
+
+Until a rule is approved the bot records `RULES_UNAPPROVED` and does not trade.
+
+### 8. Day-to-day commands
+
+```bat
+status.bat   :: mode, recovery, risk, open position, trade counts (JSON)
+stop.bat     :: graceful shutdown
+.venv\Scripts\python.exe -m btc5m_bot backup   :: on-demand database backup
+```
+
+Logs are in `logs\`, data in `data\`. If the bot is not trading, check the **Decisions** tab:
+every NO TRADE has a reason code, listed in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+### 9. Before thinking about LIVE
+
+Run in PAPER until you have enough recorded outcomes to judge the strategy. LIVE stays locked
+until the 23-condition gate passes and you type the activation phrase. See
+[Modes and LIVE activation](#modes-and-live-activation) and [docs/SECURITY.md](docs/SECURITY.md).
+
+---
+
 ## Quick start (Windows)
 
 ```bat
