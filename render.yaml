@@ -1,0 +1,47 @@
+# Render Blueprint for POLYBOT (PAPER mode).
+#
+# Runs as a headless background worker. The operator dashboard is bound to loopback by design
+# (the engine refuses any other host), so there is no web service and no public port.
+# Mode stays PAPER: config/runtime.json is created with the default mode on first start, and LIVE
+# still requires the 23-condition gate plus the typed activation phrase.
+#
+# Secrets (sync: false) are NOT stored here. Enter their values in the Render dashboard
+# (service -> Environment). Generate the first two with: python -m btc5m_bot hash-password
+services:
+  - type: worker
+    name: polybot-btc-5m
+    runtime: python
+    region: frankfurt
+    plan: starter
+    branch: master
+    # A trading bot should only restart on purpose, so deploys are manual.
+    autoDeployTrigger: "off"
+    buildCommand: pip install --upgrade pip && pip install .
+    startCommand: python -m btc5m_bot supervisor
+    # SQLite database, parquet recordings, logs and runtime.json live here. Without a disk
+    # they would be wiped on every restart and deploy.
+    disk:
+      name: polybot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: POLYBOT_DATA_DIR
+        value: /var/data/data
+      - key: POLYBOT_LOGS_DIR
+        value: /var/data/logs
+      - key: POLYBOT_CONFIG_DIR
+        value: /var/data/config
+      - key: POLYBOT_HEARTBEAT_ENABLED
+        value: "false"
+      - key: POLYBOT_DASHBOARD_PASSWORD_HASH
+        sync: false
+      - key: POLYBOT_SESSION_SECRET
+        sync: false
+      - key: POLYBOT_CLOB_API_KEY
+        sync: false
+      - key: POLYBOT_CLOB_API_SECRET
+        sync: false
+      - key: POLYBOT_CLOB_API_PASSPHRASE
+        sync: false
