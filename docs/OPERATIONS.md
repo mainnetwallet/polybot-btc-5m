@@ -35,6 +35,34 @@ so the heartbeat worker cannot send until the new engine renews it.
 Dashboard: <http://127.0.0.1:8765>. The engine refuses to bind a non-loopback host.
 `GET /api/health` is unauthenticated but reachable only from loopback.
 
+## Health endpoints (Render, UptimeRobot)
+
+The dashboard is never exposed. For hosting, the supervisor can run one extra, tiny listener
+(`btc5m_bot/healthserver.py`, a daemon thread, stdlib only). It is off unless `POLYBOT_HEALTH_PORT`
+is set, or the process runs on Render (`RENDER` is set and Render injects `PORT`). It answers
+`GET` and `HEAD` only and returns fixed status codes and short reason codes: no trading state, no
+secrets, no internal error text. If it cannot bind its port it logs an error and the bot keeps
+running.
+
+| Path | Meaning | Status |
+|---|---|---|
+| `/healthz` (also `/`) | liveness: the supervisor process is serving | always 200 |
+| `/health` | readiness: supervisor `RUNNING`, engine process alive, engine lease fresh | 200, otherwise 503 with `reason` |
+
+`reason` is one of `supervisor_not_running`, `supervisor_stalled`, `supervisor_unavailable`,
+`engine_process_down`, `engine_lease_missing`, `engine_lease_stale`, `engine_lease_invalid`,
+`engine_unhealthy`, `lease_unavailable`. The lease is considered stale after
+`POLYBOT_HEALTH_MAX_LEASE_AGE_SECONDS` (default 60). Results are cached for 2 seconds.
+
+Use `/healthz` for Render's `healthCheckPath` (Render may restart a service whose health check
+keeps failing, and a trading bot should only restart on purpose) and `/health` for UptimeRobot.
+`/health` reports **outages**. A bot that is up but deliberately not trading (`NO TRADE`: unapproved
+rule, unset capital, unhealthy feeds) still returns 200; read those in the **Decisions** tab or
+with `status`.
+
+A leftover `data\STOP` file from a previous run is removed when the supervisor starts (after it
+takes the single-instance lock), so a restart after `stop` does not exit immediately.
+
 ## Reading state
 
 `status.bat` returns JSON. The dashboard exposes the same data plus decisions, orders,

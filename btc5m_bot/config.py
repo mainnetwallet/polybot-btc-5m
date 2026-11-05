@@ -302,6 +302,23 @@ class Settings(BaseSettings):
     supervisor_max_restarts_per_hour: int = 5
     single_instance_lock: str = "polybot.lock"
 
+    # Public health listener for Render / UptimeRobot (btc5m_bot.healthserver). It is separate
+    # from the loopback-only dashboard and exposes liveness/readiness only. Off unless a port is
+    # configured: set POLYBOT_HEALTH_PORT, or run on Render, which injects PORT.
+    health_host: str = "0.0.0.0"
+    health_port: int | None = Field(default=None, ge=1, le=65535)
+    health_max_lease_age_seconds: float = Field(default=60.0, gt=0)
+
+    @property
+    def health_listen_port(self) -> int | None:
+        """Explicit POLYBOT_HEALTH_PORT, else Render's injected PORT, else disabled."""
+        if self.health_port is not None:
+            return self.health_port
+        port = os.environ.get("PORT", "")
+        if os.environ.get("RENDER") and port.isdigit() and 1 <= int(port) <= 65535:
+            return int(port)
+        return None
+
     @property
     def data_path(self) -> Path:
         return Path(self.data_dir) if self.data_dir else self.project_root / "data"

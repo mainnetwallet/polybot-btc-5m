@@ -37,6 +37,11 @@ polybot = "btc5m_bot.cli:main"
 [tool.setuptools.packages.find]
 include = ["btc5m_bot*"]
 
+# The dashboard's static files are not Python modules. Without this a regular (non-editable)
+# `pip install .`, which is what the Render build runs, silently leaves them out.
+[tool.setuptools.package-data]
+btc5m_bot = ["web/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

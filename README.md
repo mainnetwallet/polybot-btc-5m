@@ -197,6 +197,38 @@ The supervisor writes `data\STOP`, shuts the heartbeat worker down first, then t
 
 ---
 
+## Deploy on Render (PAPER) with UptimeRobot
+
+`render.yaml` is a Render Blueprint: one web service, PAPER mode, and a 1 GB persistent disk
+mounted at `/var/data` (SQLite, Parquet, logs and `runtime.json` live there). It is a *web*
+service only so that Render and UptimeRobot have something to call. The operator dashboard is
+**not** exposed and still binds loopback only. The single public listener is
+`btc5m_bot/healthserver.py`, which returns status codes and short reason codes, never trading
+state or secrets.
+
+1. Push the repo to GitHub, then in Render choose **New > Blueprint** and select it. Deploys are
+   manual (`autoDeployTrigger: "off"`), so the bot only restarts when you decide.
+2. Fill in the `sync: false` values under the service's **Environment**: dashboard hash and session
+   secret (`python -m btc5m_bot hash-password`) and the three `POLYBOT_CLOB_API_*` values.
+3. Deploy. Render's health check calls `/healthz`.
+4. In UptimeRobot add an **HTTP(s)** monitor for `https://<your-service>.onrender.com/health`
+   (5 minute interval; GET and HEAD both work).
+
+| Endpoint | Purpose | Result |
+|---|---|---|
+| `/healthz` | liveness, Render `healthCheckPath` | 200 while the process is serving |
+| `/health` | readiness, UptimeRobot | 200 only if the supervisor is `RUNNING`, the engine process is alive and its lease is fresh; otherwise 503 with a `reason` |
+
+`/health` reports outages. A bot that is alive but intentionally not trading (unapproved rule,
+unset capital, unhealthy feeds) still returns 200; those NO TRADE reasons are in the dashboard's
+**Decisions** tab. Because the dashboard is unreachable on Render, run operator commands from the
+service's Render Shell instead, for example `python -m btc5m_bot status`, `approve-rule <fingerprint>`
+and `backup`. Set `capital_usd` in `/var/data/config/runtime.json` and restart, since the file is
+read at startup. Details and the full list of reason codes are in
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+---
+
 ## First-run workflow
 
 1. Run in PAPER and let it collect data. Without CLOB credentials the oracle is
@@ -264,6 +296,7 @@ Never arm the heartbeat during development.
 ```text
 btc5m_bot/
   cli.py, engine.py, supervisor.py   entry points, loop, crash supervision
+  healthserver.py                    /healthz + /health listener for Render/UptimeRobot
   config.py                          immutable limits, runtime config, secrets
   gate.py                           23-condition LIVE gate
   recovery.py                        exchange-as-truth startup reconciliation

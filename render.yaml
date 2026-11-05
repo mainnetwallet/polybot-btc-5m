@@ -1,14 +1,25 @@
 # Render Blueprint for POLYBOT (PAPER mode).
 #
-# Runs as a headless background worker. The operator dashboard is bound to loopback by design
-# (the engine refuses any other host), so there is no web service and no public port.
+# Runs as a web service ONLY so that Render (and UptimeRobot) can reach a health endpoint. The
+# operator dashboard is still bound to loopback by design (the engine refuses any other host), so
+# it is NOT exposed. The only public surface is the tiny health listener in btc5m_bot/healthserver.py
+# (GET/HEAD /healthz and /health; no trading state, no secrets). It binds Render's injected PORT
+# (the code reads PORT when RENDER is set).
 # Mode stays PAPER: config/runtime.json is created with the default mode on first start, and LIVE
 # still requires the 23-condition gate plus the typed activation phrase.
+#
+# Health checks
+#   /healthz  liveness. Used as Render's healthCheckPath below. It only fails if the process is
+#             gone, so Render never restarts a trading bot just because the engine had a bad minute.
+#   /health   readiness. 200 only if the supervisor loop runs, the engine process is alive and its
+#             lease is fresh; otherwise 503 with a short "reason". Point UptimeRobot here:
+#               https://<your-service>.onrender.com/health
+#             (HTTP(s) monitor, 5 min interval; GET or HEAD both work).
 #
 # Secrets (sync: false) are NOT stored here. Enter their values in the Render dashboard
 # (service -> Environment). Generate the first two with: python -m btc5m_bot hash-password
 services:
-  - type: worker
+  - type: web
     name: polybot-btc-5m
     runtime: python
     region: frankfurt
@@ -18,6 +29,7 @@ services:
     autoDeployTrigger: "off"
     buildCommand: pip install --upgrade pip && pip install .
     startCommand: python -m btc5m_bot supervisor
+    healthCheckPath: /healthz
     # SQLite database, parquet recordings, logs and runtime.json live here. Without a disk
     # they would be wiped on every restart and deploy.
     disk:

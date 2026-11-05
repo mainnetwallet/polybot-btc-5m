@@ -1,6 +1,7 @@
 """Process supervision with crash-loop protection and single-instance locking."""
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import multiprocessing as mp
@@ -18,6 +19,7 @@ from .clock import RealClock
 from .config import Settings, load_settings
 from .db.engine import init_db, make_engine, make_session_factory, single_instance_lock
 from .db.repo import Repository
+from .healthserver import HealthMonitor, HealthServer, make_lease_check
 from .heartbeat import LeaseManager
 
 log = logging.getLogger(__name__)
@@ -89,14 +91,41 @@ class Supervisor:
         self._stop_file = settings.data_path / "STOP"
         self._running = True
         self._engine_pid: int | None = None
+        self._health_server: HealthServer | None = None
+        # Replaced wholesale on every status write so the health thread never touches
+        # multiprocessing objects (Process.is_alive() is not meant to be shared across threads).
+        self._snapshot: dict[str, object] = {"state": "STARTING", "engine_alive": False, "mono": time.monotonic()}
 
     # ------------------------------------------------------------------ status
+    def health_snapshot(self) -> dict[str, object]:
+        snap = self._snapshot
+        return {
+            "state": snap["state"],
+            "engine_alive": snap["engine_alive"],
+            "age_s": time.monotonic() - float(snap["mono"]),  # type: ignore[arg-type]
+        }
+
+    def _start_health_server(self) -> None:
+        port = self.settings.health_listen_port
+        if port is None:
+            return
+        if port == self.settings.port:
+            log.error("health port %s collides with the dashboard port; health server not started", port)
+            return
+        monitor = HealthMonitor(self.health_snapshot, make_lease_check(self.settings))
+        server = HealthServer(self.settings.health_host, port, monitor)
+        # A health listener problem must never stop the trading supervisor.
+        if server.start():
+            self._health_server = server
+
     def _write_status(self, state: str, detail: str = "") -> None:
+        children = {name: p.pid for name, p in self._children.items() if p.is_alive()}
+        self._snapshot = {"state": state, "engine_alive": "engine" in children, "mono": time.monotonic()}
         payload = {
             "state": state,
             "detail": detail,
             "at": datetime.now(timezone.utc).isoformat(),
-            "children": {name: p.pid for name, p in self._children.items() if p.is_alive()},
+            "children": children,
         }
         try:
             self.settings.data_path.mkdir(parents=True, exist_ok=True)
@@ -141,7 +170,16 @@ class Supervisor:
         lock_path = self.settings.data_path / self.settings.single_instance_lock
         with single_instance_lock(lock_path):
             self._install_signals()
+            # A STOP file is a request to a *running* supervisor. One left over from a previous
+            # run would make every restart exit immediately, which on a managed host (Render)
+            # becomes a silent restart loop. We hold the single-instance lock here, so this
+            # cannot cancel a stop requested of another live supervisor.
+            if self._stop_file.exists():
+                log.warning("clearing stale STOP file from a previous run: %s", self._stop_file)
+                with contextlib.suppress(OSError):
+                    self._stop_file.unlink()
             self._write_status("STARTING")
+            self._start_health_server()
             heartbeat_enabled = self.settings.heartbeat_enabled
             if heartbeat_enabled:
                 # Heartbeat must only exist in LIVE configurations; it never sends until
@@ -171,6 +209,8 @@ class Supervisor:
                     time.sleep(POLL_SECONDS)
             finally:
                 self._shutdown()
+                if self._health_server is not None:
+                    self._health_server.stop()
             self._write_status("STOPPED")
         return 0
 
