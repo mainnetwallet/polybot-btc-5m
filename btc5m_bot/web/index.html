@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>POLYBOT · Operator Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="login" class="login-wrap">
+    <form id="login-form" class="login-card" autocomplete="off">
+      <div class="brand"><span class="dot"></span> POLYBOT</div>
+      <p class="muted">Local operator console. Authentication required.</p>
+      <label>Username<input id="login-user" type="text" autocomplete="username" required></label>
+      <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="btn primary">Sign in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand"><span class="dot"></span> POLYBOT</div>
+      <div class="badges">
+        <span id="badge-mode" class="badge">PAPER</span>
+        <span id="badge-health" class="badge">UNKNOWN</span>
+        <span id="badge-live" class="badge">LIVE LOCKED</span>
+        <span id="badge-uptime" class="badge ghost">0s</span>
+      </div>
+      <div class="spacer"></div>
+      <span id="server-time" class="muted small"></span>
+      <button id="logout" class="btn ghost small">Sign out</button>
+    </header>
+
+    <div id="status-line" class="status-line">initialising…</div>
+
+    <main class="grid">
+      <section class="card span2">
+        <h2>Market</h2>
+        <div class="kv" id="market"></div>
+      </section>
+
+      <section class="card">
+        <h2>Signal</h2>
+        <div class="prob">
+          <div class="prob-head">
+            <span id="prob-outcome" class="prob-outcome">—</span>
+            <span id="prob-value" class="prob-value">—</span>
+          </div>
+          <div class="bar"><div id="prob-bar" class="bar-fill"></div></div>
+          <div class="kv" id="signal"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Feeds</h2>
+        <div id="feeds" class="feeds"></div>
+      </section>
+
+      <section class="card">
+        <h2>Books</h2>
+        <div id="books" class="books"></div>
+      </section>
+
+      <section class="card">
+        <h2>Position</h2>
+        <div class="kv" id="position"></div>
+      </section>
+
+      <section class="card">
+        <h2>Risk</h2>
+        <div class="kv" id="risk"></div>
+        <div class="controls">
+          <input id="kill-reason" placeholder="Kill reason" class="input">
+          <input id="kill-phrase" placeholder="Type KILL" class="input narrow">
+          <button id="kill-engage" class="btn danger">Engage kill switch</button>
+        </div>
+        <div class="controls">
+          <input id="clear-phrase" placeholder="Type CLEAR KILL" class="input narrow">
+          <button id="kill-clear" class="btn">Clear kill switch</button>
+        </div>
+        <div class="controls">
+          <input id="reset-phrase" placeholder="Type RESET DAY" class="input narrow">
+          <button id="reset-day" class="btn warn">Reset day lock</button>
+        </div>
+      </section>
+
+      <section class="card span2">
+        <h2>Last decision</h2>
+        <div id="decision" class="decision">no decisions yet</div>
+      </section>
+
+      <section class="card">
+        <h2>LIVE gate</h2>
+        <div class="gate-head">
+          <span id="gate-summary" class="muted">not evaluated</span>
+          <button id="gate-refresh" class="btn ghost small">Evaluate</button>
+        </div>
+        <div id="gate-list" class="gate-list"></div>
+        <div class="danger-zone">
+          <h3>Activation</h3>
+          <input id="activate-phrase" class="input" placeholder="Type ACTIVATE LIVE TRADING">
+          <button id="activate" class="btn danger">Activate LIVE</button>
+          <input id="revoke-phrase" class="input" placeholder="Type REVOKE LIVE">
+          <input id="revoke-reason" class="input" placeholder="Revocation reason">
+          <button id="revoke" class="btn">Revoke LIVE</button>
+          <h3>Heartbeat arm test</h3>
+          <p class="small muted">One-way: the first accepted heartbeat arms a key-wide cancel-all deadline. There is no disarm. Only run with a dedicated key and no open orders.</p>
+          <label class="check"><input id="hb-confirm" type="checkbox"> I understand this is irreversible</label>
+          <input id="hb-phrase" class="input" placeholder="Type ARM HEARTBEAT">
+          <button id="hb-test" class="btn danger" disabled>Arm heartbeat</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Analytics</h2>
+        <div id="analytics" class="kv"></div>
+        <button id="analytics-refresh" class="btn ghost small">Refresh analytics</button>
+      </section>
+
+      <section class="card span4">
+        <div class="tabs">
+          <button class="tab active" data-tab="decisions">Decisions</button>
+          <button class="tab" data-tab="orders">Orders</button>
+          <button class="tab" data-tab="positions">Positions</button>
+          <button class="tab" data-tab="trades">Trades</button>
+          <button class="tab" data-tab="rules">Rules</button>
+          <button class="tab" data-tab="settings">Settings</button>
+        </div>
+        <div id="tab-decisions" class="tab-panel"><table id="tbl-decisions"></table></div>
+        <div id="tab-orders" class="tab-panel hidden"><table id="tbl-orders"></table></div>
+        <div id="tab-positions" class="tab-panel hidden"><table id="tbl-positions"></table></div>
+        <div id="tab-trades" class="tab-panel hidden"><table id="tbl-trades"></table></div>
+        <div id="tab-rules" class="tab-panel hidden"><table id="tbl-rules"></table></div>
+        <div id="tab-settings" class="tab-panel hidden">
+          <form id="settings-form" class="settings-form" autocomplete="off">
+            <label>Capital USD<input id="cfg-capital" type="number" step="0.01" min="0"></label>
+            <label>Risk per trade %<input id="cfg-risk" type="number" step="0.001" min="0" max="2"></label>
+            <label>Daily loss %<input id="cfg-daily" type="number" step="0.001" min="0" max="4"></label>
+            <label>Min probability<input id="cfg-prob" type="number" step="0.01" min="0" max="1"></label>
+            <label>Min net edge<input id="cfg-edge" type="number" step="0.005" min="0" max="1"></label>
+            <label>Max spread<input id="cfg-spread" type="number" step="0.005" min="0" max="1"></label>
+            <label>Take profit ROI<input id="cfg-tp" type="number" step="0.01"></label>
+            <label>Dynamic take profit<input id="cfg-dyntp" type="checkbox"></label>
+            <label>Dynamic TP min x<input id="cfg-dyntpmin" type="number" step="0.05" min="0.1" max="1"></label>
+            <label>Dynamic TP max x<input id="cfg-dyntpmax" type="number" step="0.05" min="1"></label>
+            <label>Stop loss ROI<input id="cfg-sl" type="number" step="0.01"></label>
+            <label>Momentum reversal z<input id="cfg-momz" type="number" step="0.1" min="0"></label>
+            <label>Min hold seconds<input id="cfg-minhold" type="number" step="1" min="0"></label>
+            <label>Liquidity depth drop %<input id="cfg-liqdrop" type="number" step="1" min="1" max="99"></label>
+            <label>Liquidity spread multiple<input id="cfg-liqspread" type="number" step="0.1" min="1.1"></label>
+            <label>Strategy
+              <select id="cfg-strategy">
+                <option value="momentum">momentum</option>
+                <option value="reversal">reversal</option>
+                <option value="breakout">breakout</option>
+                <option value="trend_confirmation">trend_confirmation</option>
+              </select>
+            </label>
+            <label class="check"><input id="cfg-rules" type="checkbox"> Require resolution-rule approval</label>
+            <button type="submit" class="btn primary">Save settings</button>
+            <p id="settings-msg" class="small muted"></p>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

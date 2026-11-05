@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+data/
+logs/
+config/runtime.json
+config/live.flag
+*.db
+*.db-wal
+*.db-shm
+*.parquet
+.DS_Store
