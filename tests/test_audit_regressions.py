@@ -96,7 +96,6 @@ def test_buy_idempotency_key_is_unchanged_and_still_blocks_duplicates(clock, rep
         journal.persist_intent(second, reserve_amount=Decimal(0))
 
 
-@pytest.mark.parametrize("mode", ["PAPER", "LIVE", Mode.LIVE])
 def test_strategy_version_is_persisted_for_each_order(repo):
     journal = OrderJournal(repo)
     market = make_market()
@@ -109,6 +108,7 @@ def test_strategy_version_is_persisted_for_each_order(repo):
     assert repo.get_order(intent.client_order_id).strategy_version == "momentum:ACTIVE:v1"
 
 
+@pytest.mark.parametrize("mode", ["PAPER", "LIVE", Mode.LIVE])
 def test_order_mode_is_persisted_not_defaulted_to_paper(clock, repo, mode):
     journal = OrderJournal(repo)
     market = make_market()
