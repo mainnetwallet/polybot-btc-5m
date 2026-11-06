@@ -186,6 +186,8 @@ class BotEngine:
         self._last_backup = 0.0
         self._last_analytics = 0.0
         self._gate_report = None
+        self._clock_sync_ok = False
+        self._last_clock_sync = float("-inf")
         self._gate_at: datetime | None = None
         self._gate_at_mono: float = 0.0
         self._started_at = self.clock.now()
@@ -209,6 +211,19 @@ class BotEngine:
         if self.paper is not None:
             self.paper.taker_delay_ms = cfg.taker_delay_ms
         self.probability_engine.min_coverage_seconds = float(cfg.min_oracle_coverage_seconds)
+
+    @staticmethod
+    def _market_seconds_delay(market: MarketInfo) -> float | None:
+        raw_market = market.raw.get("market", {}) if isinstance(market.raw, dict) else {}
+        trading = raw_market.get("trading", {}) if isinstance(raw_market, dict) else {}
+        value = trading.get("secondsDelay", raw_market.get("secondsDelay", 0)) if isinstance(trading, dict) else None
+        try:
+            delay = Decimal(str(value if value is not None else 0))
+        except Exception:
+            return None
+        if not delay.is_finite() or delay < 0 or delay > 300:
+            return None
+        return float(delay)
 
     def _active_market(self, now: datetime) -> MarketStateMachine | None:
         candidates = [m for m in self._machines.values() if m.start <= now < m.end]
@@ -281,10 +296,44 @@ class BotEngine:
         finally:
             await self._shutdown()
 
+    async def _sync_exchange_clock(self, *, force: bool = False) -> bool:
+        """Keep market-window decisions on CLOB server time; fail closed on stale/large drift."""
+        mono = self.clock.monotonic()
+        if not force and mono - self._last_clock_sync < 15.0:
+            return self._clock_sync_ok
+        self._last_clock_sync = mono
+        started = self.clock.monotonic()
+        try:
+            server_time = await self.adapter.server_time()
+            rtt = self.clock.monotonic() - started
+            if rtt > 1.5:
+                raise RuntimeError(f"CLOB time endpoint RTT too high ({rtt:.3f}s)")
+            sync = getattr(self.clock, "sync_to", None)
+            if callable(sync):
+                ok = bool(sync(server_time, max_drift_seconds=5.0))
+            else:
+                ok = abs((server_time - self.clock.now()).total_seconds()) <= 1.0
+            if not ok:
+                raise RuntimeError("local clock drift exceeds the 5-second safety bound")
+            self._clock_sync_ok = True
+            self.repo.set_state("exchange_clock", {
+                "ok": True, "server_time": server_time.isoformat(),
+                "checked_at": self.clock.now().isoformat(), "rtt_seconds": round(rtt, 4),
+            })
+        except Exception as exc:  # noqa: BLE001 - market boundary uncertainty blocks LIVE entries
+            self._clock_sync_ok = False
+            self.repo.set_state("exchange_clock", {
+                "ok": False, "checked_at": self.clock.now().isoformat(), "error": str(exc)[:300],
+            })
+            log.error("exchange clock synchronization failed: %s", exc)
+        return self._clock_sync_ok
+
     async def _iteration(self) -> None:
-        now = self.clock.now()
         self._sync_runtime_config()
         self._refresh_mode()
+        if self._effective_mode is Mode.LIVE:
+            await self._sync_exchange_clock()
+        now = self.clock.now()
         if self._config().mode is Mode.LIVE and (
             self._gate_report is None or self.clock.monotonic() - self._gate_at_mono > GATE_REFRESH_SECONDS
         ):
@@ -797,6 +846,9 @@ class BotEngine:
             self._note(now, "NO_TRADE", ReasonCode.ORACLE_DATA_INSUFFICIENT, "features/probability unavailable")
             return
         f = self._features
+        if self._effective_mode is Mode.LIVE and not self._clock_sync_ok:
+            self._note(now, "NO_TRADE", ReasonCode.CLOCK_UNSYNCED, "CLOB server clock is not synchronized within the drift bound")
+            return
         if f.remaining_seconds <= 0 or f.entry_seconds_remaining <= 0:
             return
         if f.data_age_ms > cfg.max_data_age_ms:
@@ -914,8 +966,16 @@ class BotEngine:
             if not ok:
                 self._note(now, "NO_TRADE", ReasonCode.LATENCY_BREACH, f"{kind} p95 {stats.get('p95')}ms", probability=p.p_up)
                 return
-        if f.entry_seconds_remaining < (cfg.max_ack_latency_ms / 1000.0 + 1.0):
-            self._note(now, "NO_TRADE", ReasonCode.ACK_OUTSIDE_WINDOW, "too little time for a verifiable acknowledgement")
+        seconds_delay = self._market_seconds_delay(market)
+        if seconds_delay is None:
+            self._note(now, "NO_TRADE", ReasonCode.SYSTEM_BLOCKED, "market trading.secondsDelay is malformed; refusing to estimate taker timing")
+            return
+        required_ack_window = seconds_delay + cfg.max_ack_latency_ms / 1000.0 + 1.0
+        if f.entry_seconds_remaining < required_ack_window:
+            self._note(
+                now, "NO_TRADE", ReasonCode.ACK_OUTSIDE_WINDOW,
+                f"too little time for acknowledgement plus market taker delay ({seconds_delay:.3f}s)",
+            )
             return
 
         allowed, reason, detail = self.risk.pre_trade_check(
@@ -940,7 +1000,8 @@ class BotEngine:
             limit_price=limit_price,
             order_type="FOK",
             mode=self._effective_mode.value,
-            reason=f"{cfg.strategy}|p={p_outcome:.4f}|edge={edge.net_edge}",
+            strategy_version=f"{cfg.strategy}:{cfg.strategy_mode.value}:v1",
+            reason=f"{cfg.strategy}|p={p_outcome:.4f}|edge={edge.net_edge}|secondsDelay={seconds_delay}",
             now=now,
             usdc_amount=cfg.trade_size_usd if cfg.trade_size_usd is not None else sizing.notional,
         )
@@ -1599,6 +1660,7 @@ class BotEngine:
         fused = self._composite
         feeds_healthy = bool(fused and fused.can_enter)
         return GateContext(
+            clock_sync_verified=self._clock_sync_ok,
             activation_requested=(
                 cfg.mode is Mode.LIVE
                 if activation_requested_override is None
@@ -1658,12 +1720,14 @@ class BotEngine:
                 "min_sell": f"bid depth supports minimum SELL: {min_sell}",
                 "wallet_auth": "balance fetch succeeded" if wallet_ok else "balance fetch failed",
                 "funder": self.settings.funder_address or "not configured",
+                "exchange_clock": "synchronized" if self._clock_sync_ok else "not synchronized",
             },
         )
 
     async def activate_live(self, *, typed_phrase: str, actor: str) -> Any:
         from .gate import LiveGate
 
+        await self._sync_exchange_clock(force=True)
         # Reconcile against the actual exchange in LIVE mode before evaluating the gate.
         previous_recovery_mode = self.recovery.mode
         self.recovery.mode = Mode.LIVE
@@ -1709,6 +1773,8 @@ class BotEngine:
 
         if typed_phrase.strip() != "ARM HEARTBEAT":
             return {"ok": False, "error": "typed confirmation does not match 'ARM HEARTBEAT'"}
+        if not await self._sync_exchange_clock(force=True):
+            return {"ok": False, "error": "CLOB server clock synchronization failed"}
         previous_recovery_mode = self.recovery.mode
         self.recovery.mode = Mode.LIVE
         self._recovery_result = await self.recovery.run()
