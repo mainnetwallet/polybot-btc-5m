@@ -641,21 +641,72 @@ if (clearBtn) {
   });
 }
 
+
+/* Decision log: one detailed entry per decision (badge, key numbers, reason, full detail, raw features). */
+function decisionTone(d) {
+  const v = String(d || "").toUpperCase();
+  if (v === "NO_TRADE" || v === "HOLD" || v === "SKIP") return "muted";
+  if (v.includes("SELL") || v.includes("EXIT") || v.includes("CLOSE")) return "warn";
+  return "up";
+}
+
+function decisionLog(node, rows) {
+  clear(node);
+  if (!rows.length) { node.appendChild(el("div", "empty", "Nothing here yet.")); return; }
+  const fmtNum = (v, dp) => {
+    if (isEmpty(v)) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(dp) : String(v);
+  };
+  for (const x of rows) {
+    const entry = el("div", "dentry tone-" + decisionTone(x.decision));
+    const head = el("div", "dhead");
+    head.appendChild(el("span", "dbadge", text(x.decision)));
+    head.appendChild(el("span", "dreason", text(x.reason_code)));
+    head.appendChild(el("span", "dtime muted", text(x.ts, "").replace("T", " ").slice(0, 19)));
+    if (x.mode) head.appendChild(el("span", "dmode", x.mode));
+    entry.appendChild(head);
+
+    const chips = el("div", "dchips");
+    const add = (label, value) => {
+      if (isEmpty(value)) return;
+      const c = el("span", "dchip");
+      c.appendChild(el("span", "muted", label + " "));
+      c.appendChild(document.createTextNode(value));
+      chips.appendChild(c);
+    };
+    add("p", fmtNum(x.probability, 4));
+    add("edge", fmtNum(x.edge, 4));
+    add("price", fmtNum(x.price, 4));
+    add("regime", x.regime);
+    add("market", x.market_id);
+    if (chips.childNodes.length) entry.appendChild(chips);
+
+    if (!isEmpty(x.reason_detail)) entry.appendChild(el("div", "ddetail", x.reason_detail));
+
+    const feats = x.features && typeof x.features === "object" ? x.features : {};
+    const keys = Object.keys(feats);
+    if (keys.length) {
+      const box = el("details", "dfeat");
+      box.appendChild(el("summary", null, "features (" + keys.length + ")"));
+      const grid = el("div", "dfeat-grid");
+      for (const k of keys) {
+        const v = feats[k];
+        grid.appendChild(el("span", "muted", k));
+        grid.appendChild(el("span", null, v !== null && typeof v === "object" ? JSON.stringify(v) : text(v)));
+      }
+      box.appendChild(grid);
+      entry.appendChild(box);
+    }
+    node.appendChild(entry);
+  }
+}
+
 async function loadTab(name) {
   try {
     if (name === "decisions") {
       const r = await api("/api/decisions?limit=200");
-      table($("tbl-decisions"), [
-        { label: "time", value: (x) => x.ts },
-        { label: "decision", value: (x) => x.decision },
-        { label: "reason", value: (x) => x.reason_code },
-        { label: "p", value: (x) => x.probability },
-        { label: "edge", value: (x) => x.edge },
-        { label: "price", value: (x) => x.price },
-        { label: "regime", value: (x) => x.regime },
-        { label: "market", value: (x) => x.market_id },
-        { label: "detail", value: (x) => x.reason_detail, wrap: true },
-      ], r.decisions);
+      decisionLog($("tbl-decisions"), r.decisions);
     } else if (name === "orders") {
       const r = await api("/api/orders?limit=200");
       table($("tbl-orders"), [

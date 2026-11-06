@@ -348,3 +348,22 @@ td.empty { padding: 20px 12px; color: var(--muted); border-bottom: 0; }
   .hero-chart { height: 240px; }
   .seg { display: none; }
 }
+
+/* ---- decision log ---- */
+.dlog { display: grid; gap: 8px; padding: 2px 0; }
+.dlog .empty { padding: 14px 10px; color: var(--muted); }
+.dentry { padding: 10px 12px; background: var(--surface-2); border-left: 3px solid var(--muted); border-radius: 4px; display: grid; gap: 6px; }
+.dentry.tone-up { border-left-color: var(--up); }
+.dentry.tone-warn { border-left-color: var(--warn); }
+.dhead { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.dbadge { font: 700 11px/1 var(--mono); letter-spacing: .04em; padding: 3px 6px; border-radius: 3px; background: var(--line); }
+.tone-up .dbadge { color: var(--up); }
+.tone-warn .dbadge { color: var(--warn); }
+.tone-muted .dbadge { color: var(--muted); }
+.dreason { font: 600 12px/1.4 var(--mono); }
+.dtime { font: 11px/1.4 var(--mono); margin-left: auto; }
+.dmode { font: 10px/1 var(--mono); padding: 2px 5px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); }
+.dchips { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 12px/1.4 var(--mono); }
+.ddetail { font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dfeat summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+.dfeat-grid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin-top: 6px; font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
