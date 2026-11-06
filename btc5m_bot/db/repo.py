@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +31,7 @@ from .models import (
     RiskDayRow,
     RiskStateRow,
     TradeRow,
+    TwapObservationRow,
     _utcnow,
 )
 
@@ -657,11 +658,76 @@ class Repository:
         with session_scope(self._sf) as s:
             return list(s.scalars(select(ResolutionRow).order_by(ResolutionRow.id.desc()).limit(limit)))
 
+    def get_resolution(self, market_id: str) -> ResolutionRow | None:
+        with session_scope(self._sf) as s:
+            return s.scalar(select(ResolutionRow).where(ResolutionRow.market_id == market_id))
+
+    def record_actual_resolution(self, market_id: str, actual: str) -> tuple[bool | None, str | None, bool]:
+        """Attach the venue's outcome to a simulation that was saved earlier (e.g. before a restart).
+
+        The in-memory simulation is gone after a restart, but its result was already written to the
+        ``resolutions`` row. Returns ``(match, simulated_outcome, changed)``; ``changed`` is False
+        when this exact outcome was already recorded, so callers can avoid repeating alerts.
+        A market with no saved simulation is left alone: there is nothing to compare against.
+        """
+        actual_norm = str(actual or "").upper()
+        with session_scope(self._sf) as s:
+            row = s.scalar(select(ResolutionRow).where(ResolutionRow.market_id == market_id))
+            if row is None:
+                return None, None, False
+            if actual_norm in {"UP", "DOWN"} and row.simulated_outcome:
+                match: bool | None = str(row.simulated_outcome).upper() == actual_norm
+            else:
+                match = None
+            changed = row.actual_outcome != actual_norm or row.match != match
+            row.actual_outcome = actual_norm or None
+            row.match = match
+            row.validated = match is True
+            return match, row.simulated_outcome, changed
+
     def resolution_validation_count(self) -> tuple[int, int]:
         with session_scope(self._sf) as s:
             total = int(s.scalar(select(func.count()).select_from(ResolutionRow).where(ResolutionRow.match.is_not(None))) or 0)
             matched = int(s.scalar(select(func.count()).select_from(ResolutionRow).where(ResolutionRow.match.is_(True))) or 0)
         return total, matched
+
+    # --------------------------------------------------------- oracle observations
+    def add_twap_observations(self, rows: Iterable[dict[str, Any]]) -> int:
+        batch = [
+            TwapObservationRow(
+                ts=r["ts"],
+                value=r["value"],
+                source=str(r.get("source") or "")[:64],
+                symbol=str(r.get("symbol") or "btcusd")[:32],
+                window_seconds=int(r.get("window_seconds") or 60),
+                sequence=r.get("sequence"),
+            )
+            for r in rows
+        ]
+        if not batch:
+            return 0
+        with session_scope(self._sf) as s:
+            s.add_all(batch)
+        return len(batch)
+
+    def recent_twap_observations(self, since: datetime, limit: int = 10_000) -> list[TwapObservationRow]:
+        """Oldest first, newest ``limit`` rows at or after ``since``."""
+        with session_scope(self._sf) as s:
+            rows = list(
+                s.scalars(
+                    select(TwapObservationRow)
+                    .where(TwapObservationRow.ts >= since)
+                    .order_by(TwapObservationRow.ts.desc(), TwapObservationRow.id.desc())
+                    .limit(limit)
+                )
+            )
+        rows.reverse()
+        return rows
+
+    def prune_twap_observations(self, before: datetime) -> int:
+        with session_scope(self._sf) as s:
+            result = s.execute(delete(TwapObservationRow).where(TwapObservationRow.ts < before))
+            return int(result.rowcount or 0)
 
     # ---------------------------------------------------------------- heartbeat
     def get_heartbeat_state(self) -> HeartbeatStateRow:

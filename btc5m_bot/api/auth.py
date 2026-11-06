@@ -7,9 +7,11 @@ no secret is returned to the browser.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -19,11 +21,14 @@ from typing import Any
 from ..config import Settings
 from ..security import verify_password
 
+log = logging.getLogger(__name__)
+
 SESSION_COOKIE = "polybot_session"
 CSRF_HEADER = "x-csrf-token"
 MAX_FAILED_LOGINS = 5
 LOGIN_WINDOW_SECONDS = 300.0
 LOCKOUT_SECONDS = 300.0
+LOCKOUT_STATE_KEY = "auth_lockout"
 
 
 class AuthError(Exception):
@@ -49,7 +54,10 @@ class Session:
 
 
 class AuthManager:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, state_store: Any | None = None) -> None:
+        """``state_store`` (anything with ``get_state``/``set_state``, i.e. the Repository) keeps the
+        failed-login counters and lockouts across a restart. Without it a process restart, which on a
+        free host happens on every spin-down, would hand an attacker a fresh set of guesses."""
         if settings.dashboard_password_hash is None:
             raise AuthError(
                 "dashboard password hash is not configured; run "
@@ -68,6 +76,44 @@ class AuthManager:
         self._lock = threading.Lock()
         self._failures: dict[str, list[float]] = {}
         self._blocked_until: dict[str, float] = {}
+        self._store = state_store
+        self._load_lockouts()
+
+    # ----------------------------------------------------------- lockout state
+    # Wall-clock seconds (time.time), not time.monotonic: the values outlive the process.
+    def _load_lockouts(self) -> None:
+        if self._store is None:
+            return
+        try:
+            saved = self._store.get_state(LOCKOUT_STATE_KEY, {})
+            now = time.time()
+            for key, until in (saved.get("blocked_until") or {}).items():
+                with contextlib.suppress(TypeError, ValueError):
+                    if float(until) > now:
+                        self._blocked_until[str(key)] = float(until)
+            for key, stamps in (saved.get("failures") or {}).items():
+                with contextlib.suppress(TypeError, ValueError):
+                    recent = [float(t) for t in stamps if now - float(t) <= LOGIN_WINDOW_SECONDS]
+                    if recent:
+                        self._failures[str(key)] = recent
+        except Exception as exc:  # noqa: BLE001 - a database blip must not stop the dashboard
+            log.warning("could not load saved login lockouts: %s", exc)
+
+    def _save_lockouts(self, now: float) -> None:
+        if self._store is None:
+            return
+        payload = {
+            "failures": {
+                k: [round(t, 3) for t in v if now - t <= LOGIN_WINDOW_SECONDS]
+                for k, v in self._failures.items()
+                if any(now - t <= LOGIN_WINDOW_SECONDS for t in v)
+            },
+            "blocked_until": {k: round(u, 3) for k, u in self._blocked_until.items() if u > now},
+        }
+        try:
+            self._store.set_state(LOCKOUT_STATE_KEY, payload)
+        except Exception as exc:  # noqa: BLE001 - still enforced in memory
+            log.warning("could not persist login lockouts: %s", exc)
 
     @property
     def username(self) -> str:
@@ -89,7 +135,7 @@ class AuthManager:
 
     def login(self, username: str, password: str, *, ip: str = "") -> Session:
         key = self._client_key(ip)
-        now = time.monotonic()
+        now = time.time()
         with self._lock:
             if self._blocked(key, now):
                 raise AuthError("too many failed attempts; try again later")
@@ -102,8 +148,10 @@ class AuthManager:
                 if len(attempts) >= MAX_FAILED_LOGINS:
                     self._blocked_until[key] = now + LOCKOUT_SECONDS
                     self._failures[key] = []
+                self._save_lockouts(now)
                 raise AuthError("invalid credentials")
-            self._failures.pop(key, None)
+            if self._failures.pop(key, None):
+                self._save_lockouts(now)
         return self._issue(self._username)
 
     def _issue(self, subject: str) -> Session:

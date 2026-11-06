@@ -110,7 +110,7 @@ class PhraseBody(BaseModel):
 
 
 def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: ConfigStore) -> FastAPI:
-    auth = AuthManager(settings)
+    auth = AuthManager(settings, state_store=repo)
 
     app = FastAPI(title="POLYBOT", docs_url=None, redoc_url=None, openapi_url=None)
 

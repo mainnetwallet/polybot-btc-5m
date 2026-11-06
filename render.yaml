@@ -21,7 +21,7 @@
 # FREE plan limits that matter here (see https://render.com/docs/free):
 #   * No persistent disk. Recordings (parquet), logs and the local runtime.json mirror live under
 #     /tmp/polybot and are lost on every restart, redeploy and spin-down. Everything that matters
-#     (Settings, orders, positions, paper trades, approved rules, risk state, audit log) is kept in
+#     (Settings, orders, positions, paper trades, approved rules, risk state, audit log, last hour of oracle TWAP readings, login lockouts) is kept in
 #     the external database when you set POLYBOT_DATABASE_URL (below) and is restored on start.
 #   * No Shell/SSH, so CLI operator commands (approve-rule, status, backup) cannot be run; use the
 #     dashboard instead. Capital defaults to 5 and PAPER rules are auto-approved on every start, but

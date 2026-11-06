@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text, TypeDecorator, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text, TypeDecorator, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -355,3 +355,22 @@ class EquitySnapshotRow(Base):
     exposure: Mapped[Decimal] = mapped_column(DecimalText, default=Decimal(0))
     daily_pnl: Mapped[Decimal] = mapped_column(DecimalText, default=Decimal(0))
     mode: Mapped[str] = mapped_column(String(8), default="PAPER")
+
+
+class TwapObservationRow(Base):
+    """Recent Chainlink TWAP observations, so a restart does not blank the oracle history.
+
+    Without these, a restart in the middle of a 5-minute window loses the opening reference and the
+    coverage the resolution simulation needs, and that market can no longer be validated. Only a
+    short rolling window is kept (see ``BotEngine.TWAP_RETAIN_MINUTES``).
+    """
+
+    __tablename__ = "twap_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    value: Mapped[Decimal] = mapped_column(DecimalText)
+    source: Mapped[str] = mapped_column(String(64), default="")
+    symbol: Mapped[str] = mapped_column(String(32), default="btcusd")
+    window_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    sequence: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

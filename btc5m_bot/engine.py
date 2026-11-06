@@ -94,6 +94,11 @@ def _outcome(label: str) -> Outcome:
 
 
 class BotEngine:
+    TWAP_PERSIST_SECONDS = 5.0
+    TWAP_RETAIN_MINUTES = 60
+    TWAP_PRUNE_SECONDS = 600.0
+    SETTLEMENT_DEFERRED_KEY = "settlement_deferred"
+
     def __init__(
         self,
         *,
@@ -183,6 +188,9 @@ class BotEngine:
         self._trading_off_logged = False
         self._tick_cursor: dict[str, datetime] = {}
         self._twap_cursor: datetime | None = None
+        self._twap_persist_cursor: datetime | None = None
+        self._last_twap_persist = float("-inf")
+        self._last_twap_prune = float("-inf")
         self._feature_record_at = 0.0
         self._last_backup = 0.0
         self._last_exit_state_save = float("-inf")
@@ -275,6 +283,8 @@ class BotEngine:
                 self._refresh_mode()
             self.recovery.mode = self._effective_mode
             self._restore_exit_state()
+            self._restore_twap_observations()
+            self._restore_settlement_deferred()
             await self._start_feed_tasks()
             if self.start_api:
                 await self._start_api()
@@ -356,6 +366,7 @@ class BotEngine:
         if market is not None:
             self._refresh_intel(market, now)
         await self._record_data(now)
+        self._persist_twap()
         await self._manage_position(now)
         self._persist_exit_state()
         await self._evaluate_entry(now)
@@ -375,6 +386,7 @@ class BotEngine:
     async def _shutdown(self) -> None:
         self._running = False
         self._persist_exit_state(force=True)
+        self._persist_twap(force=True)
         self.lease.invalidate("engine shutting down", engine_pid=os.getpid())
         self.state.update(engine_healthy=False, detail="stopping")
         ticker = getattr(self, "_ticker_task", None)
@@ -1336,9 +1348,31 @@ class BotEngine:
             if previous is None or previous[1].reason != result.reason:
                 log.info("resolution simulation %s unavailable: %s", market.market_id, result.reason)
 
+    def _record_actual_from_saved(self, market_id: str, actual: str) -> None:
+        """Record the venue outcome when this process holds no simulation for the market.
+
+        That happens after a restart in the middle of a window: the simulation object is gone, but
+        its result was saved to the ``resolutions`` table when it became valid. Without this the
+        market would never get its actual outcome and drop out of the validation statistics.
+        """
+        try:
+            match, simulated, changed = self.repo.record_actual_resolution(market_id, actual)
+        except Exception as exc:  # noqa: BLE001 - validation bookkeeping must never stop settlement
+            log.warning("could not attach actual outcome to saved resolution %s: %s", market_id, exc)
+            return
+        if match is False and changed:
+            self.repo.add_protection_event(
+                "RESOLUTION_MISMATCH",
+                "CRITICAL",
+                market_id=market_id,
+                simulated=simulated,
+                actual=actual,
+            )
+
     def _record_actual(self, market_id: str, actual: str) -> None:
         sim = self._simulations.get(market_id)
         if sim is None:
+            self._record_actual_from_saved(market_id, actual)
             return
         spec, result = sim
         match, _ = compare_to_actual(result, actual)
@@ -1383,6 +1417,8 @@ class BotEngine:
                 match=match,
                 validated=match is True,
             )
+        else:
+            self._record_actual_from_saved(market.market_id, actual)
         position = self.repo.get_position(market.market_id, self._effective_mode.value)
         if position is not None and position.status in {"OPEN", "DUST"}:
             if self._unresolved_orders(market.market_id):
@@ -1391,6 +1427,7 @@ class BotEngine:
                 # open and require reconciliation.
                 if market.market_id not in self._settlement_deferred:
                     self._settlement_deferred.add(market.market_id)
+                    self._save_settlement_deferred()
                     self.repo.add_protection_event(
                         "SETTLEMENT_DEFERRED",
                         "CRITICAL",
@@ -1467,6 +1504,87 @@ class BotEngine:
         except Exception as exc:  # noqa: BLE001 - a database blip must not stop trading management
             self.exits.dirty = True  # retry on the next iteration
             log.warning("could not persist exit-manager state: %s", exc)
+
+    # ------------------------------------------------------ oracle history (TWAP)
+    def _restore_twap_observations(self) -> None:
+        """Reload the last hour of oracle TWAP readings saved before the restart.
+
+        The opening reference and coverage of the window in progress come from this history, so
+        without it a restart makes that market unverifiable. Old readings do not make the feed
+        look healthy: feed health still goes by the age of the newest observation.
+        """
+        try:
+            since = self.clock.now() - timedelta(minutes=self.TWAP_RETAIN_MINUTES)
+            rows = self.repo.recent_twap_observations(since)
+            if not rows:
+                return
+            self.tracker.extend(
+                TwapObservation(
+                    ts=r.ts,
+                    value=r.value,
+                    source=r.source,
+                    symbol=r.symbol,
+                    window_seconds=r.window_seconds,
+                    sequence=r.sequence,
+                )
+                for r in rows
+            )
+            last = rows[-1].ts
+            self._twap_persist_cursor = last
+            self._twap_cursor = last  # the parquet recorder already got these in the previous run
+            log.info("restored %d oracle TWAP observation(s) from the database", len(rows))
+        except Exception as exc:  # noqa: BLE001 - never block startup on this
+            log.error("could not restore oracle TWAP history: %s", exc)
+
+    def _persist_twap(self, *, force: bool = False) -> None:
+        mono = self.clock.monotonic()
+        if not force and mono - self._last_twap_persist < self.TWAP_PERSIST_SECONDS:
+            return
+        self._last_twap_persist = mono
+        cursor = self._twap_persist_cursor
+        pending = [o for o in self.tracker.observations if cursor is None or o.ts > cursor]
+        try:
+            if pending:
+                batch = pending[-5000:]
+                self.repo.add_twap_observations(
+                    {
+                        "ts": o.ts,
+                        "value": o.value,
+                        "source": o.source,
+                        "symbol": o.symbol,
+                        "window_seconds": o.window_seconds,
+                        "sequence": o.sequence,
+                    }
+                    for o in batch
+                )
+                self._twap_persist_cursor = batch[-1].ts
+            if force or mono - self._last_twap_prune >= self.TWAP_PRUNE_SECONDS:
+                self._last_twap_prune = mono
+                self.repo.prune_twap_observations(
+                    self.clock.now() - timedelta(minutes=self.TWAP_RETAIN_MINUTES)
+                )
+        except Exception as exc:  # noqa: BLE001 - a database blip must not stop the trading loop
+            log.warning("could not persist oracle TWAP history: %s", exc)
+
+    # ------------------------------------------------------ deferred settlements
+    def _restore_settlement_deferred(self) -> None:
+        """Remember which windows already raised SETTLEMENT_DEFERRED, so a restart does not re-alert."""
+        try:
+            saved = self.repo.get_state(self.SETTLEMENT_DEFERRED_KEY, {})
+            ids = saved.get("market_ids") if isinstance(saved, dict) else None
+            if isinstance(ids, list):
+                self._settlement_deferred.update(str(i) for i in ids)
+        except Exception as exc:  # noqa: BLE001
+            log.error("could not restore deferred-settlement markers: %s", exc)
+
+    def _save_settlement_deferred(self) -> None:
+        try:
+            self.repo.set_state(
+                self.SETTLEMENT_DEFERRED_KEY,
+                {"market_ids": sorted(self._settlement_deferred)[-200:]},
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not persist deferred-settlement markers: %s", exc)
 
     # -------------------------------------------------------------------- risk
     async def _maybe_backup(self, *, force: bool = False) -> None:
