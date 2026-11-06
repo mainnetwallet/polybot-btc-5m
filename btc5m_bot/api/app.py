@@ -32,6 +32,7 @@ CONFIG_WRITABLE = {
     "trading_enabled",
     "capital_usd",
     "risk_per_trade_pct",
+    "trade_size_usd",
     "daily_loss_limit_pct",
     "daily_profit_lock_pct",
     "max_consecutive_losses",

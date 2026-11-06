@@ -102,6 +102,12 @@ class RuntimeConfig(BaseModel):
     # resting limit orders. None restores the legacy share-count minimum from market metadata.
     min_order_notional_usd: Decimal | None = Decimal("1.00")
 
+    # Fixed dollar size per trade, default $1. null = size by risk_per_trade_pct (capital x %).
+    # When set, every entry buys about this many dollars of shares (1 -> $1, 2 -> $2) regardless
+    # of capital. The immutable 2%-of-capital risk cap still applies: a fixed size whose cost
+    # (incl. fees) exceeds capital x 2% is rejected with RISK_LIMIT instead of being traded.
+    trade_size_usd: Decimal | None = Decimal("1")
+
     # Master trading switch. OFF blocks every NEW entry (TRADING_OFF). Open positions keep being
     # managed and exited. Defaults to OFF so a fresh or restarted deploy never trades until the
     # operator turns it on. This is in addition to, not instead of, the risk limits and LIVE gate.
@@ -112,6 +118,13 @@ class RuntimeConfig(BaseModel):
     def _min_notional(cls, v: Decimal | None) -> Decimal | None:
         if v is not None and v <= 0:
             raise ValueError("min_order_notional_usd must be positive (or null for share minimums)")
+        return v
+
+    @field_validator("trade_size_usd")
+    @classmethod
+    def _trade_size(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v <= 0:
+            raise ValueError("trade_size_usd must be positive (or null to size by risk %)")
         return v
 
     @field_validator("capital_usd")

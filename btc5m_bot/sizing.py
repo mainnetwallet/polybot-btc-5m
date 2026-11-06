@@ -67,6 +67,106 @@ def _walk_limited(book: OrderBookSnapshot, shares: Decimal, max_price: Decimal |
     return filled, notional
 
 
+def _size_fixed(
+    *,
+    target: Decimal,
+    risk_pct: Decimal,
+    risk_budget: Decimal,
+    available: Decimal,
+    book: OrderBookSnapshot,
+    min_order_size: Decimal,
+    schedule: FeeSchedule,
+    fee_buffer: Decimal,
+    max_price: Decimal | None,
+    share_step: Decimal,
+    min_notional_usd: Decimal | None,
+) -> SizingResult:
+    """Buy a fixed dollar amount: the smallest share count whose order value is >= ``target``.
+
+    The order value (shares x price) lands within one share step (~$0.01) above the target, so a
+    $1 setting really sends a $1 order and can satisfy the $1 exchange minimum. Fees and the fee
+    buffer come on top. The result is never shrunk to fit: if the book, the balance or the 2% risk
+    cap cannot take the full amount, the trade is refused with a reason instead.
+    """
+    best = book.best_ask
+    assert best is not None
+    floor_shares = share_step if min_notional_usd is not None else min_order_size
+
+    def _info(**kw: Decimal) -> dict[str, Decimal]:
+        return dict(risk_budget=risk_budget, **kw)
+
+    # Start at the share count that certainly reaches the target at the best ask, then walk down
+    # while a smaller count still reaches it (deeper levels cost more per share).
+    shares = ((target / best) / share_step).to_integral_value(rounding="ROUND_CEILING") * share_step
+    shares = max(shares, floor_shares)
+    filled, notional = _walk_limited(book, shares, max_price)
+    if filled < shares:
+        return SizingResult(
+            False,
+            ReasonCode.INSUFFICIENT_DEPTH,
+            f"book can only fill {filled} of {shares} shares needed for the fixed ${target} trade",
+            **_info(max_by_depth=floor_to_step(filled, share_step)),
+        )
+    for _ in range(200):
+        smaller = shares - share_step
+        if smaller < floor_shares:
+            break
+        f2, n2 = _walk_limited(book, smaller, max_price)
+        if f2 < smaller or n2 < target:
+            break
+        shares, notional = smaller, n2
+
+    if min_notional_usd is not None and notional < min_notional_usd:
+        return SizingResult(
+            False,
+            ReasonCode.BELOW_MIN_ORDER,
+            f"fixed trade ${target} is below the ${min_notional_usd} minimum order; trade_size_usd must be >= ${min_notional_usd}",
+            **_info(min_order_cost=min_notional_usd),
+        )
+    if min_notional_usd is None and shares < min_order_size:
+        return SizingResult(
+            False,
+            ReasonCode.BELOW_MIN_ORDER,
+            f"fixed trade ${target} buys {shares} shares, below the {min_order_size}-share minimum",
+            **_info(),
+        )
+
+    avg = notional / shares
+    fee = taker_fee(shares, avg, schedule)
+    cost = notional + fee + fee_buffer * shares
+    if cost > risk_budget:
+        return SizingResult(
+            False,
+            ReasonCode.RISK_LIMIT,
+            f"fixed trade ${target} costs ${cost:.4f} with fees, above the ${risk_budget:.4f} risk cap "
+            f"({risk_pct * 100:.2f}% of capital); lower trade_size_usd or raise capital to at least ${cost / risk_pct:.2f}",
+            **_info(capital_required=cost),
+        )
+    if cost > available:
+        return SizingResult(
+            False,
+            ReasonCode.INSUFFICIENT_BALANCE,
+            f"fixed trade costs ${cost:.4f} but only ${available:.4f} is available",
+            **_info(capital_required=cost),
+        )
+    return SizingResult(
+        True,
+        ReasonCode.OK,
+        f"fixed ${target} trade",
+        shares=shares,
+        notional=notional,
+        avg_price=avg,
+        fee=fee,
+        worst_case_loss=cost,
+        capital_required=cost,
+        risk_budget=risk_budget,
+        max_by_risk=floor_to_step(risk_budget / (best + fee / shares + fee_buffer), share_step),
+        max_by_balance=floor_to_step(available / (best + fee / shares + fee_buffer), share_step),
+        max_by_depth=floor_to_step(sum((l.size for l in book.asks if max_price is None or l.price <= max_price), Decimal(0)), share_step),
+        min_order_cost=min_notional_usd if min_notional_usd is not None else min_order_size * (best + fee_buffer),
+    )
+
+
 def size_position(
     *,
     capital: Decimal | None,
@@ -81,8 +181,12 @@ def size_position(
     share_step: Decimal = SHARE_STEP,
     extra_risk_cap: Decimal | None = None,
     min_notional_usd: Decimal | None = None,
+    fixed_notional_usd: Decimal | None = None,
 ) -> SizingResult:
     """Size a BUY inside the risk budget.
+
+    ``fixed_notional_usd`` buys a fixed dollar amount per trade (see ``_size_fixed``); the
+    risk-percent budget is then only a ceiling, never a target.
 
     ``min_notional_usd`` switches the entry minimum from a share count to a dollar amount
     (marketable BUYs are denominated in collateral). The size is still never raised to meet it:
@@ -101,6 +205,20 @@ def size_position(
     available = max(Decimal(0), balance - max(Decimal(0), reserved))
     if available <= 0:
         return SizingResult(False, ReasonCode.INSUFFICIENT_BALANCE, "no available balance", risk_budget=risk_budget)
+    if fixed_notional_usd is not None:
+        return _size_fixed(
+            target=fixed_notional_usd,
+            risk_pct=risk_pct,
+            risk_budget=risk_budget,
+            available=available,
+            book=book,
+            min_order_size=min_order_size,
+            schedule=schedule,
+            fee_buffer=fee_buffer,
+            max_price=max_price,
+            share_step=share_step,
+            min_notional_usd=min_notional_usd,
+        )
     max_cost = min(risk_budget, available)
 
     # Conservative per-share cost at the best ask (fees scale with price; re-evaluated below).

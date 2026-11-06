@@ -737,6 +737,7 @@ async function loadTab(name) {
       const c = r.config;
       renderTradingSwitch(!!c.trading_enabled);
       $("cfg-capital").value = text(c.capital_usd, "");
+      $("cfg-tradesize").value = text(c.trade_size_usd, "");
       $("cfg-risk").value = (Number(c.risk_per_trade_pct) * 100).toFixed(2);
       $("cfg-daily").value = (Number(c.daily_loss_limit_pct) * 100).toFixed(2);
       $("cfg-prob").value = c.min_probability;
@@ -803,6 +804,8 @@ $("settings-form").addEventListener("submit", async (event) => {
   };
   const capital = $("cfg-capital").value.trim();
   patch.capital_usd = capital === "" ? null : capital;
+  const tradeSize = $("cfg-tradesize").value.trim();
+  patch.trade_size_usd = tradeSize === "" ? null : tradeSize;
   try {
     await post("/api/config", { patch });
     $("settings-msg").textContent = "saved";

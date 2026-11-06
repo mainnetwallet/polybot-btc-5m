@@ -816,6 +816,7 @@ class BotEngine:
             fee_buffer=cfg.fee_buffer,
             max_price=limit_price,
             min_notional_usd=cfg.min_order_notional_usd,
+            fixed_notional_usd=cfg.trade_size_usd,
         )
         if not sizing.allowed:
             self._note(now, "NO_TRADE", sizing.reason, sizing.detail, probability=p.p_up, extra={"sizing": self._sizing_dict(sizing)})
@@ -1376,6 +1377,7 @@ class BotEngine:
             config={
                 "capital_usd": _dec(cfg.capital_usd),
                 "risk_per_trade_pct": _dec(cfg.risk_per_trade_pct),
+                "trade_size_usd": _dec(cfg.trade_size_usd),
                 "daily_loss_limit_pct": _dec(cfg.daily_loss_limit_pct),
                 "max_consecutive_losses": cfg.max_consecutive_losses,
                 "cooldown_minutes": cfg.cooldown_minutes,

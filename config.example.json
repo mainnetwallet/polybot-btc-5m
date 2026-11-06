@@ -1,6 +1,7 @@
 {
   "mode": "PAPER",
   "capital_usd": null,
+  "trade_size_usd": 1,
   "risk_per_trade_pct": 0.02,
   "daily_loss_limit_pct": 0.04,
   "daily_profit_lock_pct": null,

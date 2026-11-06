@@ -265,3 +265,60 @@ def test_dollar_minimum_never_raises_risk_to_reach_one_dollar():
     assert not result.allowed
     assert result.reason is ReasonCode.BELOW_MIN_ORDER
     assert result.shares == Decimal(0)
+
+
+# ---- fixed dollar trade size (trade_size_usd) ---------------------------------------------------
+def _fixed(target, *, capital="1000", ask="0.50", ask_size="10000", balance="1000", min_notional="1.00"):
+    return size_position(
+        capital=Decimal(capital), risk_pct=Decimal("0.02"), balance=Decimal(balance),
+        book=make_book("up", ask=ask, ask_size=ask_size), min_order_size=Decimal("5"),
+        schedule=SCHEDULE, min_notional_usd=Decimal(min_notional), fixed_notional_usd=Decimal(target),
+    )
+
+
+@pytest.mark.parametrize("target", ["1", "2", "5", "10"])
+def test_fixed_size_trades_the_requested_dollar_amount(target):
+    result = _fixed(target)
+    assert result.allowed, result.detail
+    # order value sits at the target, at most one share step (~$0.01) above it
+    assert Decimal(target) <= result.notional <= Decimal(target) + Decimal("0.01")
+
+
+def test_fixed_size_ignores_capital_size():
+    small = _fixed("2", capital="200")
+    large = _fixed("2", capital="100000", balance="100000")
+    assert small.allowed and large.allowed
+    assert small.notional == large.notional
+
+
+def test_fixed_size_refused_above_two_percent_cap():
+    # 2% of 100 = $2.00, a $5 trade (plus fees) would break the immutable risk cap
+    result = _fixed("5", capital="100", balance="100")
+    assert not result.allowed
+    assert result.reason is ReasonCode.RISK_LIMIT
+    assert "raise capital" in result.detail
+
+
+def test_fixed_size_below_exchange_minimum_is_refused():
+    result = _fixed("0.50")
+    assert not result.allowed
+    assert result.reason is ReasonCode.BELOW_MIN_ORDER
+
+
+def test_fixed_size_never_shrinks_when_book_is_thin():
+    result = _fixed("20", ask_size="5")  # $20 at 0.50 needs 40 shares, only 5 on the ask
+    assert not result.allowed
+    assert result.reason is ReasonCode.INSUFFICIENT_DEPTH
+
+
+def test_fixed_size_needs_enough_balance():
+    result = _fixed("10", balance="5")
+    assert not result.allowed
+    assert result.reason is ReasonCode.INSUFFICIENT_BALANCE
+
+
+def test_fixed_size_none_keeps_percent_sizing():
+    book = make_book("up", ask="0.50", ask_size="10000")
+    kw = dict(capital=Decimal("1000"), risk_pct=Decimal("0.02"), balance=Decimal("1000"),
+              book=book, min_order_size=Decimal("5"), schedule=SCHEDULE)
+    assert size_position(**kw, fixed_notional_usd=None).shares == size_position(**kw).shares
