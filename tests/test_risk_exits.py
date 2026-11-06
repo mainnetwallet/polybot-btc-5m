@@ -290,9 +290,9 @@ def test_thin_book_holds_and_never_submits_infeasible_sell():
     assert decision.shadow_action is ExitAction.SELL
 
 
-def test_small_position_below_five_shares_is_still_sold():
-    # The 5-share minimum is a LIMIT-order rule; exits are market orders, so a 3-share position
-    # that hits its stop loss must be sold, not held to resolution.
+def test_subminimum_position_is_not_sent_as_an_invalid_market_sell():
+    # CLOB market orders reuse the same order construction constraints; a position below
+    # the current book minimum cannot be assumed sellable and must not produce a rejected order.
     exits = HybridExitManager()
     market = make_market()
     book = make_book(market.asset_id(Outcome.UP), bid="0.30", bid_size="100")
@@ -300,8 +300,9 @@ def test_small_position_below_five_shares_is_still_sold():
         position=position(shares=Decimal("3"), cost_basis=Decimal("1.5")), market=market,
         up_book=book, down_book=None, probability=None, config=config(), now=START,
     )
-    assert decision.action is ExitAction.SELL
-    assert decision.shares == Decimal("3")
+    assert decision.action is ExitAction.HOLD
+    assert decision.reason == "SELL_NOT_FEASIBLE"
+    assert decision.shares == Decimal("0")
 
 
 def test_no_bid_holds_to_resolution():
@@ -478,21 +479,20 @@ def test_dynamic_take_profit_locks_a_weak_edge_earlier():
     assert decision.metadata["take_profit_target"] == Decimal("0.15")
 
 
-def test_fixed_trade_size_has_no_minimum_capital(clock, repo):
-    # fixed dollar size: a $5 trade is allowed even though it is 25% of a $20 capital
+def test_fixed_trade_size_cannot_bypass_two_percent_risk_cap(clock, repo):
     cfg = RuntimeConfig(capital_usd=Decimal("20"), trade_size_usd=Decimal("5"))
     risk = manager(clock, repo, cfg)
-    allowed, reason, _ = risk.pre_trade_check(
+    allowed, reason, detail = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5.2"),
         planned_cost=Decimal("5.2"), balance=Decimal("20"), recovery_ready=True,
     )
-    assert allowed and reason is ReasonCode.OK
-    # ...but it still cannot spend more than the available balance
+    assert not allowed and reason is ReasonCode.RISK_LIMIT
+    assert "0.40" in detail
     allowed, reason, _ = risk.pre_trade_check(
-        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5.2"),
-        planned_cost=Decimal("5.2"), balance=Decimal("3"), recovery_ready=True,
+        market_id="mkt-2", mode=Mode.PAPER, planned_loss=Decimal("0.30"),
+        planned_cost=Decimal("0.30"), balance=Decimal("20"), recovery_ready=True,
     )
-    assert not allowed and reason is ReasonCode.INSUFFICIENT_BALANCE
+    assert allowed and reason is ReasonCode.OK
 
 
 def test_capital_follows_wallet_balance_only_when_safe():

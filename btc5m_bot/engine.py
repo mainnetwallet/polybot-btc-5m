@@ -77,7 +77,6 @@ GATE_REFRESH_SECONDS = 60.0
 BOOK_RECORD_SECONDS = 2.0
 DECISION_LOG_SECONDS = 2.0
 HOLD_LOG_SECONDS = 10.0
-PAPER_SETTLE_GRACE_SECONDS = 15.0
 # A NO_TRADE that repeats the previous reason for the same market is a heartbeat, not news:
 # it is logged at most this often. A different reason is still logged right away (see above).
 DECISION_REPEAT_LOG_SECONDS = 60.0
@@ -176,6 +175,7 @@ class BotEngine:
         self._last_exit_attempt: dict[str, float] = {}
         self._last_simulation: dict[str, float] = {}
         self._last_resolution_try: dict[str, float] = {}
+        self._last_redemption_scan = float("-inf")
         self._simulations: dict[str, Any] = {}
         self._settlement_deferred: set[str] = set()
         self._last_hold_log: dict[str, float] = {}
@@ -187,6 +187,8 @@ class BotEngine:
         self._last_backup = 0.0
         self._last_analytics = 0.0
         self._gate_report = None
+        self._clock_sync_ok = False
+        self._last_clock_sync = float("-inf")
         self._gate_at: datetime | None = None
         self._gate_at_mono: float = 0.0
         self._started_at = self.clock.now()
@@ -210,6 +212,19 @@ class BotEngine:
         if self.paper is not None:
             self.paper.taker_delay_ms = cfg.taker_delay_ms
         self.probability_engine.min_coverage_seconds = float(cfg.min_oracle_coverage_seconds)
+
+    @staticmethod
+    def _market_seconds_delay(market: MarketInfo) -> float | None:
+        raw_market = market.raw.get("market", {}) if isinstance(market.raw, dict) else {}
+        trading = raw_market.get("trading", {}) if isinstance(raw_market, dict) else {}
+        value = trading.get("secondsDelay", raw_market.get("secondsDelay", 0)) if isinstance(trading, dict) else None
+        try:
+            delay = Decimal(str(value if value is not None else 0))
+        except Exception:
+            return None
+        if not delay.is_finite() or delay < 0 or delay > 300:
+            return None
+        return float(delay)
 
     def _active_market(self, now: datetime) -> MarketStateMachine | None:
         candidates = [m for m in self._machines.values() if m.start <= now < m.end]
@@ -282,10 +297,44 @@ class BotEngine:
         finally:
             await self._shutdown()
 
+    async def _sync_exchange_clock(self, *, force: bool = False) -> bool:
+        """Keep market-window decisions on CLOB server time; fail closed on stale/large drift."""
+        mono = self.clock.monotonic()
+        if not force and mono - self._last_clock_sync < 15.0:
+            return self._clock_sync_ok
+        self._last_clock_sync = mono
+        started = self.clock.monotonic()
+        try:
+            server_time = await self.adapter.server_time()
+            rtt = self.clock.monotonic() - started
+            if rtt > 1.5:
+                raise RuntimeError(f"CLOB time endpoint RTT too high ({rtt:.3f}s)")
+            sync = getattr(self.clock, "sync_to", None)
+            if callable(sync):
+                ok = bool(sync(server_time, max_drift_seconds=5.0))
+            else:
+                ok = abs((server_time - self.clock.now()).total_seconds()) <= 1.0
+            if not ok:
+                raise RuntimeError("local clock drift exceeds the 5-second safety bound")
+            self._clock_sync_ok = True
+            self.repo.set_state("exchange_clock", {
+                "ok": True, "server_time": server_time.isoformat(),
+                "checked_at": self.clock.now().isoformat(), "rtt_seconds": round(rtt, 4),
+            })
+        except Exception as exc:  # noqa: BLE001 - market boundary uncertainty blocks LIVE entries
+            self._clock_sync_ok = False
+            self.repo.set_state("exchange_clock", {
+                "ok": False, "checked_at": self.clock.now().isoformat(), "error": str(exc)[:300],
+            })
+            log.error("exchange clock synchronization failed: %s", exc)
+        return self._clock_sync_ok
+
     async def _iteration(self) -> None:
-        now = self.clock.now()
         self._sync_runtime_config()
         self._refresh_mode()
+        if self._effective_mode is Mode.LIVE:
+            await self._sync_exchange_clock()
+        now = self.clock.now()
         if self._config().mode is Mode.LIVE and (
             self._gate_report is None or self.clock.monotonic() - self._gate_at_mono > GATE_REFRESH_SECONDS
         ):
@@ -308,6 +357,7 @@ class BotEngine:
         await self._manage_position(now)
         await self._evaluate_entry(now)
         await self._settle_windows(now)
+        await self._maybe_redeem()
         await self._maybe_backup()
         await self._maybe_analytics(now)
         await self._publish(now)
@@ -511,8 +561,9 @@ class BotEngine:
         target = self._config().capital_usd
         if target is None or target <= 0:
             return
-        if self.paper.cash <= 0 and not self.paper.positions and not self.paper.fills:
+        if self.paper.cash <= 0 and not self.paper.positions and not self.paper.has_history:
             self.paper.cash = target
+            self.repo.set_state("paper_initial_capital", {"amount": str(target)})
 
     async def _refresh_balance(self, now: datetime) -> None:
         if self._effective_mode is Mode.PAPER:
@@ -797,6 +848,9 @@ class BotEngine:
             self._note(now, "NO_TRADE", ReasonCode.ORACLE_DATA_INSUFFICIENT, "features/probability unavailable")
             return
         f = self._features
+        if self._effective_mode is Mode.LIVE and not self._clock_sync_ok:
+            self._note(now, "NO_TRADE", ReasonCode.CLOCK_UNSYNCED, "CLOB server clock is not synchronized within the drift bound")
+            return
         if f.remaining_seconds <= 0 or f.entry_seconds_remaining <= 0:
             return
         if f.data_age_ms > cfg.max_data_age_ms:
@@ -842,7 +896,7 @@ class BotEngine:
         if not market.fee_verified:
             self._note(now, "NO_TRADE", ReasonCode.FEES_UNVERIFIED, "fee schedule missing from market metadata")
             return
-        tick = market.tick_size
+        tick = book.tick_size
         raw_limit = min(Decimal(1) - tick, book.best_ask + cfg.max_slippage)
         limit_price = floor_to_step(raw_limit, tick)
         if limit_price < book.best_ask:
@@ -854,7 +908,7 @@ class BotEngine:
             balance=self._balance,
             reserved=self.repo.active_reserved_total(),
             book=book,
-            min_order_size=market.min_order_size,
+            min_order_size=max(market.min_order_size, book.min_order_size),
             schedule=schedule,
             fee_buffer=cfg.fee_buffer,
             max_price=limit_price,
@@ -914,8 +968,16 @@ class BotEngine:
             if not ok:
                 self._note(now, "NO_TRADE", ReasonCode.LATENCY_BREACH, f"{kind} p95 {stats.get('p95')}ms", probability=p.p_up)
                 return
-        if f.entry_seconds_remaining < (cfg.max_ack_latency_ms / 1000.0 + 1.0):
-            self._note(now, "NO_TRADE", ReasonCode.ACK_OUTSIDE_WINDOW, "too little time for a verifiable acknowledgement")
+        seconds_delay = self._market_seconds_delay(market)
+        if seconds_delay is None:
+            self._note(now, "NO_TRADE", ReasonCode.SYSTEM_BLOCKED, "market trading.secondsDelay is malformed; refusing to estimate taker timing")
+            return
+        required_ack_window = seconds_delay + cfg.max_ack_latency_ms / 1000.0 + 1.0
+        if f.entry_seconds_remaining < required_ack_window:
+            self._note(
+                now, "NO_TRADE", ReasonCode.ACK_OUTSIDE_WINDOW,
+                f"too little time for acknowledgement plus market taker delay ({seconds_delay:.3f}s)",
+            )
             return
 
         allowed, reason, detail = self.risk.pre_trade_check(
@@ -940,7 +1002,8 @@ class BotEngine:
             limit_price=limit_price,
             order_type="FOK",
             mode=self._effective_mode.value,
-            reason=f"{cfg.strategy}|p={p_outcome:.4f}|edge={edge.net_edge}",
+            strategy_version=f"{cfg.strategy}:{cfg.strategy_mode.value}:v1",
+            reason=f"{cfg.strategy}|p={p_outcome:.4f}|edge={edge.net_edge}|secondsDelay={seconds_delay}",
             now=now,
             usdc_amount=cfg.trade_size_usd if cfg.trade_size_usd is not None else sizing.notional,
         )
@@ -1148,23 +1211,86 @@ class BotEngine:
                     log.debug("resolution fetch failed: %s", exc)
                 if actual:
                     self._record_actual(market.market_id, actual)
-            provisional = False
-            if actual is None and self._effective_mode is Mode.PAPER:
-                # On-chain payouts can lag by minutes. PAPER has no funds to redeem, so settle from
-                # the oracle simulation after a short grace period instead of leaving the position
-                # open (it blocks new entries and keeps win/loss out of Analytics). LIVE never guesses.
-                sim = self._simulations.get(market.market_id)
-                if (
-                    sim is not None
-                    and sim[1].valid
-                    and sim[1].outcome is not None
-                    and (now - machine.end).total_seconds() >= PAPER_SETTLE_GRACE_SECONDS
-                ):
-                    actual = sim[1].outcome.value
-                    provisional = True
+            # A simulation is not an exchange resolution. Keep the PAPER position and window
+            # pending until the venue reports the actual outcome; never book guessed PnL.
             if actual is None:
                 continue
-            await self._finalize_window(machine, actual, now, provisional=provisional)
+            await self._finalize_window(machine, actual, now)
+
+    async def _maybe_redeem(self) -> None:
+        """Redeem only venue-confirmed redeemable LIVE positions; never retry an ambiguous submit."""
+        if self._effective_mode is not Mode.LIVE:
+            return
+        mono = self.clock.monotonic()
+        if mono - self._last_redemption_scan < 30.0:
+            return
+        self._last_redemption_scan = mono
+        settled = [
+            row for row in self.repo.list_positions(mode=Mode.LIVE.value, limit=200)
+            if row.status == "SETTLED"
+        ]
+        if not settled:
+            return
+        try:
+            remote_positions = await self.adapter.get_positions()
+        except Exception as exc:  # noqa: BLE001 - failed reads must never trigger blind redemption
+            log.warning("redemption scan failed: %s", exc)
+            return
+        remote_by_asset = {p.asset_id: p for p in remote_positions}
+        for position in settled:
+            key = f"redemption:{position.condition_id}"
+            state = self.repo.get_state(key, {})
+            status = str(state.get("status", "READY")).upper()
+            if status in {"SUBMITTING", "UNKNOWN", "CONFIRMED"}:
+                # A timeout/crash after submission is ambiguous. Never submit a second
+                # redemption automatically; operator reconciliation is required.
+                continue
+            remote = remote_by_asset.get(position.asset_id)
+            if remote is None or remote.condition_id != position.condition_id or not remote.redeemable:
+                continue
+            started_at = self.clock.now()
+            self.repo.set_state(key, {
+                "status": "SUBMITTING",
+                "condition_id": position.condition_id,
+                "asset_id": position.asset_id,
+                "position_id": position.id,
+                "started_at": started_at.isoformat(),
+            })
+            try:
+                tx_hash = await self.adapter.redeem(condition_id=position.condition_id)
+                if not tx_hash or not str(tx_hash).startswith("0x"):
+                    raise RuntimeError("redemption did not return a confirmed transaction hash")
+            except Exception as exc:  # noqa: BLE001 - do not retry ambiguous chain submission
+                self.repo.set_state(key, {
+                    "status": "UNKNOWN",
+                    "condition_id": position.condition_id,
+                    "asset_id": position.asset_id,
+                    "position_id": position.id,
+                    "started_at": started_at.isoformat(),
+                    "error": str(exc)[:500],
+                })
+                self.repo.add_protection_event(
+                    "REDEMPTION_UNCONFIRMED", "CRITICAL",
+                    market_id=position.market_id, condition_id=position.condition_id,
+                    error=str(exc)[:300],
+                    note="redemption may have been submitted; automatic retry disabled to prevent duplicate transactions",
+                )
+                continue
+            confirmed_at = self.clock.now()
+            self.repo.set_state(key, {
+                "status": "CONFIRMED",
+                "condition_id": position.condition_id,
+                "asset_id": position.asset_id,
+                "position_id": position.id,
+                "transaction_hash": str(tx_hash),
+                "confirmed_at": confirmed_at.isoformat(),
+            })
+            self.repo.update_position(position.id, status="REDEEMED")
+            self.repo.add_protection_event(
+                "REDEMPTION_CONFIRMED", "INFO",
+                market_id=position.market_id, condition_id=position.condition_id,
+                transaction_hash=str(tx_hash),
+            )
 
     def _attempt_simulation(self, machine: MarketStateMachine, now: datetime) -> None:
         market = machine.market
@@ -1234,11 +1360,11 @@ class BotEngine:
             )
 
     async def _finalize_window(
-        self, machine: MarketStateMachine, actual: str, now: datetime, *, provisional: bool = False
+        self, machine: MarketStateMachine, actual: str, now: datetime
     ) -> None:
         market = machine.market
         sim = self._simulations.get(market.market_id)
-        if sim is not None and not provisional:
+        if sim is not None:
             _, result = sim
             match, _ = compare_to_actual(result, actual)
             self.repo.save_resolution(
@@ -1280,8 +1406,7 @@ class BotEngine:
                 now,
                 "SETTLE",
                 ReasonCode.OK,
-                f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized:.4f}"
-                + (" (PAPER, oracle-simulated outcome; on-chain resolution pending)" if provisional else ""),
+                f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized:.4f}",
                 price=Decimal(1) if position.outcome.upper() == actual.upper() else Decimal(0),
                 extra={
                     "outcome": position.outcome,
@@ -1297,7 +1422,7 @@ class BotEngine:
             market.market_id,
             MarketState.SETTLED.value,
             resolution_outcome=actual.upper(),
-            resolution_confirmed=not provisional,
+            resolution_confirmed=True,
             settlement_ts=now,
         )
 
@@ -1528,7 +1653,13 @@ class BotEngine:
         await self._publish(self._gate_at)
         return self._gate_report
 
-    async def _gate_context(self, *, heartbeat_tested_override: bool | None = None):
+    async def _gate_context(
+        self,
+        *,
+        heartbeat_tested_override: bool | None = None,
+        activation_requested_override: bool | None = None,
+        heartbeat_preflight: bool = False,
+    ):
         from .gate import GateContext
 
         cfg = self._config()
@@ -1550,15 +1681,22 @@ class BotEngine:
         rule = self.repo.get_resolution_rule(market.rules_fingerprint) if market else None
         rule_spec = market.raw.get("rule_spec", {}) if market else {}
         recovery_row = self.repo.get_recovery_state()
-        risk_status = self.risk.status(self._effective_mode, balance=self._balance)
+        gate_mode = Mode.LIVE if heartbeat_preflight else self._effective_mode
+        risk_status = self.risk.status(gate_mode, balance=self._balance)
         heartbeat_state = self.repo.get_heartbeat_state()
         test_state = self.repo.get_state("heartbeat_test", {})
         hb_check = validate_heartbeat_configuration(
             self.settings,
-            live_mode=cfg.mode is Mode.LIVE,
-            activation_active=activation is not None,
+            # Static readiness is evaluated before activation; the heartbeat worker still
+            # requires actual LIVE mode and persisted activation before periodic sends.
+            live_mode=(cfg.mode is Mode.LIVE or heartbeat_preflight),
+            activation_active=(activation is not None or heartbeat_preflight),
             dedicated_key_confirmed=self.settings.heartbeat_dedicated_key_confirmed,
-            test_recorded=bool(test_state.get("ok")),
+            test_recorded=(
+                bool(test_state.get("ok"))
+                if heartbeat_tested_override is None
+                else heartbeat_tested_override
+            ),
         )
         last_backup = self.repo.get_state("last_backup", {})
         backup_at = None
@@ -1567,7 +1705,7 @@ class BotEngine:
                 backup_at = datetime.fromisoformat(last_backup["at"])
         backup_ok = bool(backup_at and (utcnow() - backup_at).days < BACKUP_MAX_AGE_DAYS)
         validation = build_validation_report(self.repo, cfg)
-        open_orders = self.repo.open_orders(mode=self._effective_mode.value)
+        open_orders = self.repo.open_orders(mode=gate_mode.value)
         min_buy = False
         min_sell = False
         protocol_ok = False
@@ -1577,18 +1715,16 @@ class BotEngine:
             up_book, down_book = self._market_books(market)
             schedule = FeeSchedule.from_market(market)
             if up_book and up_book.best_ask:
+                min_shares = max(market.min_order_size, up_book.min_order_size)
                 unit = up_book.best_ask + taker_fee(Decimal(1), up_book.best_ask, schedule) + cfg.fee_buffer
-                cost = market.min_order_size * unit
-                if cfg.trade_size_usd is not None:
-                    # fixed dollar size: no capital minimum, only the exchange's dollar minimum
-                    affordable = cfg.trade_size_usd >= (cfg.min_order_notional_usd or Decimal(0))
-                else:
-                    affordable = cfg.capital_usd is not None and cost <= cfg.capital_usd * cfg.risk_per_trade_pct
-                min_buy = (
-                    cfg.capital_usd is not None
-                    and affordable
-                    and up_book.depth(Side.BUY) >= market.min_order_size
+                cost = min_shares * unit
+                risk_budget = (cfg.capital_usd or Decimal(0)) * cfg.risk_per_trade_pct
+                target_ok = (
+                    cfg.trade_size_usd is None
+                    or (min_shares * up_book.best_ask <= cfg.trade_size_usd <= risk_budget)
                 )
+                affordable = cfg.capital_usd is not None and cost <= risk_budget and target_ok
+                min_buy = affordable and up_book.depth(Side.BUY) >= min_shares
             min_sell = bool(
                 up_book
                 and down_book
@@ -1601,7 +1737,12 @@ class BotEngine:
         fused = self._composite
         feeds_healthy = bool(fused and fused.can_enter)
         return GateContext(
-            activation_requested=cfg.mode is Mode.LIVE,
+            clock_sync_verified=self._clock_sync_ok,
+            activation_requested=(
+                cfg.mode is Mode.LIVE
+                if activation_requested_override is None
+                else activation_requested_override
+            ),
             geo=geo,
             wallet_auth_verified=wallet_ok,
             signature_type=self.settings.signature_type,
@@ -1656,18 +1797,36 @@ class BotEngine:
                 "min_sell": f"bid depth supports minimum SELL: {min_sell}",
                 "wallet_auth": "balance fetch succeeded" if wallet_ok else "balance fetch failed",
                 "funder": self.settings.funder_address or "not configured",
+                "exchange_clock": "synchronized" if self._clock_sync_ok else "not synchronized",
             },
         )
 
     async def activate_live(self, *, typed_phrase: str, actor: str) -> Any:
         from .gate import LiveGate
 
-        ctx = await self._gate_context(heartbeat_tested_override=None)
-        report = LiveGate(self.repo).activate(ctx, typed_phrase=typed_phrase, actor=actor, config={"capital": _dec(self._config().capital_usd)})
+        await self._sync_exchange_clock(force=True)
+        # Reconcile against the actual exchange in LIVE mode before evaluating the gate.
+        previous_recovery_mode = self.recovery.mode
+        self.recovery.mode = Mode.LIVE
+        self._recovery_result = await self.recovery.run()
+        ctx = await self._gate_context(
+            heartbeat_tested_override=None,
+            activation_requested_override=True,
+            heartbeat_preflight=True,
+        )
+        report = LiveGate(self.repo).activate(
+            ctx,
+            typed_phrase=typed_phrase,
+            actor=actor,
+            config={"capital": _dec(self._config().capital_usd)},
+        )
         if report.passed:
             self.config_store.update({"mode": "LIVE"})
+            self.recovery.mode = Mode.LIVE
             self._gate_report = report
             self._refresh_mode()
+        else:
+            self.recovery.mode = previous_recovery_mode
         return report
 
     async def revoke_live(self, *, actor: str, reason: str) -> None:
@@ -1691,17 +1850,31 @@ class BotEngine:
 
         if typed_phrase.strip() != "ARM HEARTBEAT":
             return {"ok": False, "error": "typed confirmation does not match 'ARM HEARTBEAT'"}
+        if not await self._sync_exchange_clock(force=True):
+            return {"ok": False, "error": "CLOB server clock synchronization failed"}
+        previous_recovery_mode = self.recovery.mode
+        self.recovery.mode = Mode.LIVE
+        self._recovery_result = await self.recovery.run()
         open_orders = await self.adapter.get_open_orders()
         if open_orders:
+            self.recovery.mode = previous_recovery_mode
             return {"ok": False, "error": f"{len(open_orders)} open orders exist; refusing to arm heartbeat"}
-        ctx = await self._gate_context(heartbeat_tested_override=True)
+        ctx = await self._gate_context(
+            heartbeat_tested_override=True,
+            activation_requested_override=True,
+            heartbeat_preflight=True,
+        )
         report = LiveGate(self.repo).evaluate(ctx)
-        failing = [c for c in report.failed if c.key not in {"final_confirmation", "heartbeat"}]
+        # Only final typed confirmation is intentionally absent. Every safety condition,
+        # including heartbeat configuration, must pass before the irreversible first send.
+        failing = [c for c in report.failed if c.key != "final_confirmation"]
         if failing:
-            return {"ok": False, "error": "gate not ready except heartbeat", "failed": [c.key for c in failing]}
+            self.recovery.mode = previous_recovery_mode
+            return {"ok": False, "error": "gate not ready for heartbeat arm", "failed": [c.key for c in failing]}
         try:
             result = await self.adapter.send_heartbeat("")
         except Exception as exc:  # noqa: BLE001
+            self.recovery.mode = previous_recovery_mode
             return {"ok": False, "error": str(exc)}
         now = self.clock.now()
         self.repo.update_heartbeat_state(
@@ -1717,6 +1890,7 @@ class BotEngine:
             {"ok": True, "at": now.isoformat(), "actor": actor, "note": "one-way heartbeat arm test"},
         )
         self.repo.audit("HEARTBEAT_ARM_TEST", actor=actor, detail={"heartbeat_id_present": True})
+        self.recovery.mode = previous_recovery_mode
         return {"ok": True, "heartbeat_id_present": True, "armed": True}
 
     # ------------------------------------------------------------- serializers
@@ -1855,7 +2029,40 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
 
     recorder = ParquetRecorder(settings.parquet_path)
     cfg = config_store.snapshot()
-    paper = PaperBroker(cfg.capital_usd or Decimal(0), clock, taker_delay_ms=cfg.taker_delay_ms)
+    initial_paper = repo.get_state("paper_initial_capital", {})
+    stored_amount = initial_paper.get("amount") if isinstance(initial_paper, dict) else None
+    restore_blocked = bool(initial_paper.get("restore_blocked")) if isinstance(initial_paper, dict) else False
+    if stored_amount is None:
+        legacy_trades = repo.list_trades(mode="PAPER", limit=1)
+        legacy_positions = repo.list_positions(mode="PAPER", limit=100)
+        has_legacy_history = bool(legacy_trades) or any(
+            row.status in {"OPEN", "DUST"} for row in legacy_positions
+        )
+        if has_legacy_history:
+            # Old databases have no persisted starting bankroll. Guessing it from today's
+            # config would fabricate cash; restore positions but fail closed on new entries.
+            paper_capital = Decimal(0)
+            restore_blocked = True
+            repo.set_state(
+                "paper_initial_capital",
+                {"amount": "0", "restore_blocked": True, "reason": "legacy bankroll has no persisted opening balance"},
+            )
+            repo.add_protection_event(
+                "PAPER_BANKROLL_RESTORE_BLOCKED",
+                "CRITICAL",
+                note="legacy PAPER trade history exists but its original starting bankroll is unknown; new entries blocked",
+            )
+        else:
+            paper_capital = cfg.capital_usd or Decimal(0)
+            repo.set_state("paper_initial_capital", {"amount": str(paper_capital)})
+    else:
+        paper_capital = Decimal(str(stored_amount))
+    paper = PaperBroker.restore_from_repository(
+        paper_capital, clock, repo, taker_delay_ms=cfg.taker_delay_ms
+    )
+    if restore_blocked:
+        paper.cash = Decimal(0)
+        paper.has_history = True
     engine = BotEngine(
         settings=settings,
         repo=repo,

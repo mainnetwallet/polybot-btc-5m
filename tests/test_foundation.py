@@ -13,6 +13,23 @@ from btc5m_bot.types import Mode, floor_to_step
 from btc5m_bot.exchange.fees import FeeSchedule, maker_fee, taker_fee
 
 
+def test_real_clock_accepts_small_exchange_offset_and_rejects_large_drift():
+    from datetime import datetime, timedelta, timezone
+    from btc5m_bot.clock import RealClock
+
+    clock = RealClock()
+    target = datetime.now(timezone.utc) + timedelta(seconds=1)
+    assert clock.sync_to(target, max_drift_seconds=5)
+    assert abs((clock.now() - target).total_seconds()) < 0.2
+    assert not clock.sync_to(target + timedelta(seconds=10), max_drift_seconds=5)
+
+
+def test_sqlite_uses_full_synchronous_for_durable_order_journal(db):
+    with db.connect() as conn:
+        synchronous = conn.exec_driver_sql("PRAGMA synchronous").scalar_one()
+    assert synchronous == 2  # SQLite FULL
+
+
 def test_risk_limits_are_immutable():
     with pytest.raises(HardLimitError):
         RuntimeConfig(risk_per_trade_pct=Decimal("0.021"))

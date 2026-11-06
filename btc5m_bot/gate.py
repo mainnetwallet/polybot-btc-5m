@@ -1,4 +1,4 @@
-"""Strict 23-condition LIVE gate and explicit activation.
+"""Strict 24-condition LIVE gate and explicit activation.
 
 LIVE is never enabled silently. Every condition is evaluated from live state; a
 failure returns the exact failed requirement and LIVE stays disabled.
@@ -54,6 +54,7 @@ class GateContext:
     heartbeat_configured: bool = False
     heartbeat_tested: bool = False
     statistical_validation_passed: bool = False
+    clock_sync_verified: bool = False
     final_confirmation: bool = False
     details: dict[str, str] = field(default_factory=dict)
 
@@ -141,7 +142,8 @@ class LiveGate:
             GateCondition(20, "min_sell", "Minimum SELL and exit feasibility verified", ctx.min_sell_feasible, ctx.detail("min_sell")),
             GateCondition(21, "heartbeat", "Heartbeat safety configured and tested", heartbeat_ok, ctx.detail("heartbeat")),
             GateCondition(22, "statistical_validation", "Statistical validation passed", ctx.statistical_validation_passed, ctx.detail("validation")),
-            GateCondition(23, "final_confirmation", "Explicit final user confirmation", ctx.final_confirmation, ""),
+            GateCondition(23, "exchange_clock", "Exchange clock synchronized within drift bound", ctx.clock_sync_verified, ctx.detail("exchange_clock")),
+            GateCondition(24, "final_confirmation", "Explicit final user confirmation", ctx.final_confirmation, ""),
         )
         return GateReport(conditions=conditions, checked_at=as_utc(utcnow()))
 

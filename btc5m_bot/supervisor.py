@@ -48,6 +48,11 @@ def heartbeat_process_main(settings_dict: dict) -> None:
     lease = LeaseManager(repo, clock)
 
     def live_allowed() -> bool:
+        # The first accepted heartbeat permanently arms the key-wide timeout-cancel-all.
+        # Once that test is recorded, keep the heartbeat alive even in PAPER/revoked mode;
+        # this process only sends heartbeats and never grants the engine trading permission.
+        if repo.get_state("heartbeat_test", {}).get("ok"):
+            return settings.heartbeat_enabled and settings.heartbeat_dedicated_key_confirmed
         if repo.active_live_activation() is None:
             return False
         try:

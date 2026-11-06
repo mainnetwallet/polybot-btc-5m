@@ -1,7 +1,7 @@
 """SELL feasibility, checked before any BUY.
 
-Exits are market (FOK) orders, which the exchange accepts at any share size: the 5-share minimum
-applies to LIMIT orders only. So there is no minimum SELL size and no "dust" rule here.
+Treat the CLOB's published minimum order size as a venue-wide share constraint. Do not assume
+marketable FOK/FAK orders are exempt unless the live venue contract proves otherwise.
 """
 from __future__ import annotations
 
@@ -38,6 +38,11 @@ def assess_exit_feasibility(
         return ExitFeasibility(
             False, False, None, Decimal(0), Decimal(0), None, None,
             ["no bid liquidity; losing-side exit may be impossible"],
+        )
+    if shares < book.min_order_size:
+        return ExitFeasibility(
+            False, False, book.best_bid, Decimal(0), Decimal(0), None, None,
+            [f"position size {shares} is below the venue minimum {book.min_order_size}; exit route is not verified"],
         )
     depth = sum((l.size for l in book.bids), Decimal(0))
     valid_qty = floor_to_step(min(shares, depth), SHARE_STEP)

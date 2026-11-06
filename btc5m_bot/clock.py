@@ -13,8 +13,23 @@ class Clock(Protocol):
 
 
 class RealClock:
+    """Wall clock disciplined against the exchange time endpoint."""
+
+    def __init__(self) -> None:
+        self._offset = timedelta(0)
+
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(timezone.utc) + self._offset
+
+    def sync_to(self, server_time: datetime, *, max_drift_seconds: float = 5.0) -> bool:
+        """Apply a bounded exchange-time correction; reject implausible local clock drift."""
+        raw_now = datetime.now(timezone.utc)
+        server_time = server_time.astimezone(timezone.utc)
+        offset = server_time - raw_now
+        if abs(offset.total_seconds()) > max_drift_seconds:
+            return False
+        self._offset = offset
+        return True
 
     def monotonic(self) -> float:
         return time.monotonic()

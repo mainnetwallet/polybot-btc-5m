@@ -242,6 +242,31 @@ def test_unresolved_order_blocks_entry(settings, repo, adapter, config_store):
     assert adapter.placed == []
 
 
+def test_live_redemption_requires_redeemable_exchange_position_and_confirms_once(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    config_store.update({"mode": "LIVE"})
+    engine._effective_mode = Mode.LIVE
+    position = repo.create_position(
+        market_id=market.market_id, condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP), outcome="UP",
+        shares=Decimal("5"), avg_price=Decimal("0.5"), entry_fee=Decimal(0), mode="LIVE",
+    )
+    repo.update_position(position.id, status="SETTLED")
+    from btc5m_bot.exchange.base import ExchangePosition
+    adapter.positions = [ExchangePosition(
+        asset_id=position.asset_id, condition_id=position.condition_id,
+        size=Decimal("5"), avg_price=Decimal("0.5"), redeemable=True,
+    )]
+    asyncio.run(engine._maybe_redeem())
+    assert repo.get_position(market.market_id, "LIVE").status == "REDEEMED"
+    state = repo.get_state(f"redemption:{market.condition_id}")
+    assert state["status"] == "CONFIRMED"
+    assert state["transaction_hash"] == "0xfake-redeem"
+    asyncio.run(engine._maybe_redeem())
+    assert repo.get_state(f"redemption:{market.condition_id}")["status"] == "CONFIRMED"
+
+
 def test_settlement_deferred_while_order_unresolved(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, market, _ = _build(settings, repo, adapter, config_store, clock)
@@ -397,7 +422,7 @@ def test_repeated_no_trade_reason_is_logged_once_per_minute(settings, repo, adap
     assert len(repo.recent_decisions(500)) - before == 3
 
 
-def test_paper_settles_from_oracle_simulation_when_onchain_resolution_lags(settings, repo, adapter, config_store):
+def test_paper_waits_for_actual_resolution_when_oracle_simulation_is_ready(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, market, _ = _build(settings, repo, adapter, config_store, clock)
     asyncio.run(engine._iteration())
@@ -425,8 +450,17 @@ def test_paper_settles_from_oracle_simulation_when_onchain_resolution_lags(setti
     asyncio.run(engine._settle_windows(clock.now()))
     assert repo.get_position(market.market_id, "PAPER").status == "OPEN"
 
-    # After the grace period: settled and counted as a closing trade.
+    # A valid simulation still cannot be booked as an actual exchange resolution.
     clock.advance(30)
+    asyncio.run(engine._settle_windows(clock.now()))
+    position = repo.get_position(market.market_id, "PAPER")
+    assert position.status == "OPEN"
+    assert machine.state is not MarketState.SETTLED
+    assert not any(t.kind == "SETTLEMENT" for t in repo.list_trades(limit=10))
+
+    # Once the venue reports the actual outcome, the position can be settled.
+    adapter.resolutions[market.condition_id] = "UP"
+    clock.advance(11)
     asyncio.run(engine._settle_windows(clock.now()))
     position = repo.get_position(market.market_id, "PAPER")
     assert position.status == "SETTLED"
