@@ -39,6 +39,8 @@ class BtcTick:
     source: str = ""
     sequence: int | None = None
     recv_ts: datetime | None = None
+    # True for ticks rebuilt from historical candles at startup (never recorded as live data).
+    backfilled: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ts", as_utc(self.ts))

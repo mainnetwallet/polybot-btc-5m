@@ -619,7 +619,7 @@ class BotEngine:
     async def _record_data(self, now: datetime) -> None:
         for name, feed in self.feeds.items():
             cursor = self._tick_cursor.get(name)
-            ticks = [t for t in feed.series.ticks if cursor is None or t.ts > cursor]
+            ticks = [t for t in feed.series.ticks if (cursor is None or t.ts > cursor) and not t.backfilled]
             if not ticks:
                 continue
             self._tick_cursor[name] = ticks[-1].ts

@@ -22,6 +22,8 @@ from .series import BtcSeries, BtcTick
 log = logging.getLogger(__name__)
 
 BINANCE_URL = "wss://stream.binance.com:9443/ws/btcusdt@trade"
+BINANCE_REST_URL = "https://api.binance.com/api/v3/klines"
+BACKFILL_SECONDS = 300
 COINBASE_URL = "wss://ws-feed.exchange.coinbase.com"
 COINBASE_PRODUCT = "BTC-USD"
 
@@ -86,6 +88,33 @@ def parse_binance(message: Any, recv_ts: datetime) -> BtcTick | None:
     )
 
 
+def parse_binance_klines(rows: Any, now: datetime, source: str = "binance") -> list[BtcTick]:
+    """Turn Binance 1-second klines into backfill ticks (one per CLOSED candle, oldest first).
+
+    Row layout: [openTime, open, high, low, close, volume, closeTime, ...]. The candle close price
+    at its close time is a real traded price from the same provider, so it is a faithful
+    1-second sample of the series. Malformed rows and still-open candles are skipped.
+    """
+    ticks: list[BtcTick] = []
+    if not isinstance(rows, list):
+        return ticks
+    now = as_utc(now)
+    last_ts: datetime | None = None
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 7:
+            continue
+        price = _decimal(row[4])
+        qty = _decimal(row[5]) or Decimal(0)
+        ts = _epoch_ms(row[6])
+        if price is None or price <= 0 or ts is None or ts > now:
+            continue
+        if last_ts is not None and ts <= last_ts:
+            continue
+        last_ts = ts
+        ticks.append(BtcTick(ts=ts, price=price, qty=max(qty, Decimal(0)), source=source, recv_ts=ts, backfilled=True))
+    return ticks
+
+
 def parse_coinbase(message: Any, recv_ts: datetime) -> BtcTick | None:
     """Parse a Coinbase ``match`` / ``last_match`` message.
 
@@ -145,6 +174,10 @@ class WebsocketBtcFeed:
         self._backoff = 1.0
 
     # -- provider specifics
+    async def backfill(self) -> int:
+        """Preload recent history so indicators are ready right after a (re)start. Default: none."""
+        return 0
+
     def parse(self, message: Any, recv_ts: datetime) -> BtcTick | None:
         raise NotImplementedError
 
@@ -187,6 +220,15 @@ class WebsocketBtcFeed:
         return None
 
     async def run(self) -> None:
+        if len(self.series) == 0:
+            try:
+                loaded = await asyncio.wait_for(self.backfill(), timeout=15.0)
+                if loaded:
+                    log.info("%s feed backfilled %d ticks", self.name, loaded)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - backfill is best effort, live data still works
+                log.warning("%s backfill skipped: %s", self.name, str(exc) or exc.__class__.__name__)
         while not self._stop.is_set():
             try:
                 async with websockets.connect(
@@ -218,6 +260,24 @@ class WebsocketBtcFeed:
 class BinanceFeed(WebsocketBtcFeed):
     name = "binance"
     default_url = BINANCE_URL
+    rest_url = BINANCE_REST_URL
+
+    async def backfill(self) -> int:
+        """Load the last few minutes of 1-second candles from Binance REST (best effort)."""
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                self.rest_url,
+                params={"symbol": "BTCUSDT", "interval": "1s", "limit": BACKFILL_SECONDS},
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+        added = 0
+        for tick in parse_binance_klines(rows, self.clock.now(), source=self.name):
+            if self.series.add(tick):
+                added += 1
+        return added
 
     def parse(self, message: Any, recv_ts: datetime) -> BtcTick | None:
         return parse_binance(message, recv_ts)
