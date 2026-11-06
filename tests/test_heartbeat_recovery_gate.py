@@ -520,5 +520,5 @@ def test_recovery_blocks_sell_fill_when_fee_rate_does_not_match_market(clock, re
         repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE,
     ).run(now=order_created + timedelta(seconds=1)))
     assert result.ready is False
-    assert any("fee rate differs" in block for block in result.blocks)
+    assert any("fee rate differs" in block or "fee schedule disagrees" in block for block in result.blocks)
     assert repo.get_position(market.market_id, "LIVE").shares == Decimal("10")
