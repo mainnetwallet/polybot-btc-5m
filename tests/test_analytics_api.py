@@ -415,3 +415,56 @@ def test_statistical_gate_threshold_is_not_dashboard_writable(client):
     assert "paper_validation_min_trades" in response.json()["detail"]
     assert store.snapshot().paper_validation_min_trades == before
     assert "paper_validation_min_trades" not in test_client.get("/static/app.js").text
+
+
+
+def test_validation_uses_a_separate_chronological_holdout_and_fails_on_negative_holdout():
+    class ValidationRepo:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def list_trades(self, *, mode=None, limit=500):
+            return self.rows[:limit]
+
+        def list_orders(self, *, market_id=None, statuses=None, mode=None, limit=100):
+            return []
+
+        def resolution_validation_count(self):
+            return (0, 0)
+
+        def list_resolutions(self, limit=5000):
+            return []
+
+        def recent_decisions(self, limit=50_000):
+            return []
+
+    rows = [trade("1.00" if day < 70 else "-1.00", day=day) for day in range(100)]
+    report = build_validation_report(ValidationRepo(rows), RuntimeConfig(paper_validation_min_trades=30))
+    holdout = report.metrics["chronological_holdout"]
+    assert holdout["split"] == "70/30 chronological"
+    assert holdout["train_trades"] == 70
+    assert holdout["trades"] == 30
+    assert Decimal(holdout["net_pnl"]) < 0
+    assert any("chronological holdout net PnL" in failure for failure in report.failures)
+
+
+def test_validation_requires_a_minimum_chronological_holdout_sample():
+    class ValidationRepo:
+        def list_trades(self, *, mode=None, limit=500):
+            return [trade("1.00", day=day) for day in range(30)]
+
+        def list_orders(self, *, market_id=None, statuses=None, mode=None, limit=100):
+            return []
+
+        def resolution_validation_count(self):
+            return (0, 0)
+
+        def list_resolutions(self, limit=5000):
+            return []
+
+        def recent_decisions(self, limit=50_000):
+            return []
+
+    report = build_validation_report(ValidationRepo(), RuntimeConfig(paper_validation_min_trades=30))
+    assert report.metrics["chronological_holdout"]["trades"] == 9
+    assert any("chronological holdout trades" in failure for failure in report.failures)
