@@ -462,12 +462,24 @@ class PolymarketAdapter(ExchangeAdapter):
         return HeartbeatResult(heartbeat_id=new_id, armed=True, raw={"heartbeat_id": new_id})
 
     async def redeem(self, *, condition_id: str | None = None, position_id: str | None = None) -> str:
+        """Submit redemption and return only after the SDK confirms a mined transaction."""
+        if (condition_id is None) == (position_id is None):
+            raise ExchangeError("provide exactly one of condition_id or position_id for redemption")
         client = await self._secure_client()
         try:
             handle = await client.redeem_positions(condition_id=condition_id, position_id=position_id)
+            wait = getattr(handle, "wait", None)
+            if not callable(wait):
+                raise ExchangeError("SDK redemption handle has no confirmation waiter")
+            outcome = await asyncio.wait_for(wait(), timeout=180.0)
+            tx_hash = getattr(outcome, "transaction_hash", None) or getattr(handle, "transaction_hash", None)
+            if not tx_hash:
+                raise ExchangeError("redemption returned without a confirmed transaction hash")
+            return str(tx_hash)
         except Exception as exc:
-            raise ExchangeError(f"redeem failed: {exc}") from exc
-        return str(handle)
+            if isinstance(exc, ExchangeError):
+                raise
+            raise ExchangeError(f"redemption failed or confirmation is unknown: {exc}") from exc
 
     async def server_time(self) -> datetime:
         response = await self._http.get(f"{self.settings.clob_url.rstrip('/')}/time")

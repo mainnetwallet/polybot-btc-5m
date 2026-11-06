@@ -175,6 +175,7 @@ class BotEngine:
         self._last_exit_attempt: dict[str, float] = {}
         self._last_simulation: dict[str, float] = {}
         self._last_resolution_try: dict[str, float] = {}
+        self._last_redemption_scan = float("-inf")
         self._simulations: dict[str, Any] = {}
         self._settlement_deferred: set[str] = set()
         self._last_hold_log: dict[str, float] = {}
@@ -356,6 +357,7 @@ class BotEngine:
         await self._manage_position(now)
         await self._evaluate_entry(now)
         await self._settle_windows(now)
+        await self._maybe_redeem()
         await self._maybe_backup()
         await self._maybe_analytics(now)
         await self._publish(now)
@@ -1214,6 +1216,81 @@ class BotEngine:
             if actual is None:
                 continue
             await self._finalize_window(machine, actual, now)
+
+    async def _maybe_redeem(self) -> None:
+        """Redeem only venue-confirmed redeemable LIVE positions; never retry an ambiguous submit."""
+        if self._effective_mode is not Mode.LIVE:
+            return
+        mono = self.clock.monotonic()
+        if mono - self._last_redemption_scan < 30.0:
+            return
+        self._last_redemption_scan = mono
+        settled = [
+            row for row in self.repo.list_positions(mode=Mode.LIVE.value, limit=200)
+            if row.status == "SETTLED"
+        ]
+        if not settled:
+            return
+        try:
+            remote_positions = await self.adapter.get_positions()
+        except Exception as exc:  # noqa: BLE001 - failed reads must never trigger blind redemption
+            log.warning("redemption scan failed: %s", exc)
+            return
+        remote_by_asset = {p.asset_id: p for p in remote_positions}
+        for position in settled:
+            key = f"redemption:{position.condition_id}"
+            state = self.repo.get_state(key, {})
+            status = str(state.get("status", "READY")).upper()
+            if status in {"SUBMITTING", "UNKNOWN", "CONFIRMED"}:
+                # A timeout/crash after submission is ambiguous. Never submit a second
+                # redemption automatically; operator reconciliation is required.
+                continue
+            remote = remote_by_asset.get(position.asset_id)
+            if remote is None or remote.condition_id != position.condition_id or not remote.redeemable:
+                continue
+            started_at = self.clock.now()
+            self.repo.set_state(key, {
+                "status": "SUBMITTING",
+                "condition_id": position.condition_id,
+                "asset_id": position.asset_id,
+                "position_id": position.id,
+                "started_at": started_at.isoformat(),
+            })
+            try:
+                tx_hash = await self.adapter.redeem(condition_id=position.condition_id)
+                if not tx_hash or not str(tx_hash).startswith("0x"):
+                    raise RuntimeError("redemption did not return a confirmed transaction hash")
+            except Exception as exc:  # noqa: BLE001 - do not retry ambiguous chain submission
+                self.repo.set_state(key, {
+                    "status": "UNKNOWN",
+                    "condition_id": position.condition_id,
+                    "asset_id": position.asset_id,
+                    "position_id": position.id,
+                    "started_at": started_at.isoformat(),
+                    "error": str(exc)[:500],
+                })
+                self.repo.add_protection_event(
+                    "REDEMPTION_UNCONFIRMED", "CRITICAL",
+                    market_id=position.market_id, condition_id=position.condition_id,
+                    error=str(exc)[:300],
+                    note="redemption may have been submitted; automatic retry disabled to prevent duplicate transactions",
+                )
+                continue
+            confirmed_at = self.clock.now()
+            self.repo.set_state(key, {
+                "status": "CONFIRMED",
+                "condition_id": position.condition_id,
+                "asset_id": position.asset_id,
+                "position_id": position.id,
+                "transaction_hash": str(tx_hash),
+                "confirmed_at": confirmed_at.isoformat(),
+            })
+            self.repo.update_position(position.id, status="REDEEMED")
+            self.repo.add_protection_event(
+                "REDEMPTION_CONFIRMED", "INFO",
+                market_id=position.market_id, condition_id=position.condition_id,
+                transaction_hash=str(tx_hash),
+            )
 
     def _attempt_simulation(self, machine: MarketStateMachine, now: datetime) -> None:
         market = machine.market

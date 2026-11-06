@@ -240,6 +240,8 @@ gate/protective checks fail. The heartbeat is key-wide: a timeout cancels all or
 the API key. Investigate the network and credentials before restarting. Never arm the
 heartbeat for testing outside an authorized LIVE activation.
 
+After a LIVE position settles, the engine scans for the matching venue position marked `redeemable`, submits one redemption, waits for the SDK transaction confirmation, and records the transaction hash. An ambiguous submission is quarantined as `UNKNOWN` and is not retried automatically; reconcile it on-chain before changing that state.
+
 The engine synchronizes its market clock against the CLOB `/time` endpoint every 15 seconds while LIVE. A slow response or local clock drift beyond five seconds blocks LIVE entry and fails the activation gate. The engine also reads market `trading.secondsDelay` and requires enough entry-window time for that delay plus acknowledgement latency; malformed delay metadata blocks entry.
 
 The worker re-checks the whole heartbeat safety configuration (enabled flag, credentials,

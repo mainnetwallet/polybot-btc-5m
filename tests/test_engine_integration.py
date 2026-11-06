@@ -242,6 +242,31 @@ def test_unresolved_order_blocks_entry(settings, repo, adapter, config_store):
     assert adapter.placed == []
 
 
+def test_live_redemption_requires_redeemable_exchange_position_and_confirms_once(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    config_store.update({"mode": "LIVE"})
+    engine._effective_mode = Mode.LIVE
+    position = repo.create_position(
+        market_id=market.market_id, condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP), outcome="UP",
+        shares=Decimal("5"), avg_price=Decimal("0.5"), entry_fee=Decimal(0), mode="LIVE",
+    )
+    repo.update_position(position.id, status="SETTLED")
+    from btc5m_bot.exchange.base import ExchangePosition
+    adapter.positions = [ExchangePosition(
+        asset_id=position.asset_id, condition_id=position.condition_id,
+        size=Decimal("5"), avg_price=Decimal("0.5"), redeemable=True,
+    )]
+    asyncio.run(engine._maybe_redeem())
+    assert repo.get_position(market.market_id, "LIVE").status == "REDEEMED"
+    state = repo.get_state(f"redemption:{market.condition_id}")
+    assert state["status"] == "CONFIRMED"
+    assert state["transaction_hash"] == "0xfake-redeem"
+    asyncio.run(engine._maybe_redeem())
+    assert repo.get_state(f"redemption:{market.condition_id}")["status"] == "CONFIRMED"
+
+
 def test_settlement_deferred_while_order_unresolved(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, market, _ = _build(settings, repo, adapter, config_store, clock)

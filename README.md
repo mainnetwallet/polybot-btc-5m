@@ -391,6 +391,7 @@ acknowledgement window.
 ### Execution
 
 - Write-ahead order journal with idempotency keys
+- LIVE settlement redemption waits for a confirmed SDK transaction receipt; ambiguous submissions are quarantined and never blindly retried
 - FOK/FAK book walking with slippage, fees, and partial-fill accounting; minimum share constraints are enforced conservatively
 - Exchange `UNKNOWN` results are never blindly retried
 - Exit feasibility checks the book's minimum share quantity; the bot does not assume an undocumented market-order exemption
