@@ -2,7 +2,7 @@
 
 Autonomous **Polymarket BTC 5-minute UP/DOWN** research and trading system for Windows.
 PAPER is the default. The complete LIVE path exists but stays locked until the operator
-passes a strict 23-condition gate and types an explicit confirmation phrase.
+passes a strict 24-condition gate and types an explicit confirmation phrase.
 
 > **No profitability is promised or implied.** The system is designed to prefer
 > **NO TRADE** over a bad trade. A passing test suite proves code behavior, not edge.
@@ -23,7 +23,7 @@ passes a strict 23-condition gate and types an explicit confirmation phrase.
 | Raising size to meet exchange minimums | **never** — returns `BELOW_MIN_ORDER` |
 | Resolution source | **Chainlink only**; Pyth/spot never substituted |
 | Unknown resolution rules | **NO TRADE** |
-| LIVE gate | **23 conditions**, all must pass, plus typed phrase |
+| LIVE gate | **24 conditions**, all must pass, plus typed phrase |
 
 The hard caps (2% risk %, 2 consecutive losses, 1 position, 1 entry per market, 120-second entry
 window) are enforced by `RuntimeConfig` validators, not just documentation. Exceeding them raises
@@ -161,7 +161,7 @@ every NO TRADE has a reason code, listed in [docs/OPERATIONS.md](docs/OPERATIONS
 ### 9. Before thinking about LIVE
 
 Run in PAPER until you have enough recorded outcomes to judge the strategy. LIVE stays locked
-until the 23-condition gate passes and you type the activation phrase. See
+until the 24-condition gate passes and you type the activation phrase. See
 [Modes and LIVE activation](#modes-and-live-activation) and [docs/SECURITY.md](docs/SECURITY.md).
 
 ---
@@ -317,7 +317,7 @@ effective mode to LIVE only if **all** of the following hold:
 
 1. `mode` is `LIVE`
 2. an active, persisted LIVE activation exists
-3. the latest 23-condition gate report passed
+3. the latest 24-condition gate report passed
 
 Otherwise it silently runs PAPER and writes `live_locked=true` to state.
 
@@ -361,7 +361,7 @@ btc5m_bot/
   cli.py, engine.py, supervisor.py   entry points, loop, crash supervision
   healthserver.py                    /healthz + /health listener for Render/UptimeRobot
   config.py                          immutable limits, runtime config, secrets
-  gate.py                           23-condition LIVE gate
+  gate.py                           24-condition LIVE gate
   recovery.py                        exchange-as-truth startup reconciliation
   heartbeat/                         lease, worker, one-way heartbeat safety
   markets/                           Gamma discovery, lifecycle, rule parsing

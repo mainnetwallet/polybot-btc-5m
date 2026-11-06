@@ -74,7 +74,7 @@ takes the single-instance lock), so a restart after `stop` does not exit immedia
 ## Reading state
 
 `status.bat` returns JSON. The dashboard exposes the same data plus decisions, orders,
-positions, trades, rules, resolutions, analytics, and the 23-condition gate.
+positions, trades, rules, resolutions, analytics, and the 24-condition gate.
 
 Key fields:
 
@@ -136,6 +136,7 @@ if one is missing):
 | `GEO_BLOCKED` | reserved: defined, not emitted by the current engine (geoblock is checked by the LIVE gate) |
 | `LIVE_GATE_FAILED` | reserved: defined, not emitted by the current engine (gate results are shown on the Go live page) |
 | `UNKNOWN_ERROR` | reserved: defined, not emitted by the current engine |
+| `CLOCK_UNSYNCED` | CLOB server time is unavailable or outside the allowed drift bound; LIVE entries are blocked |
 
 ## First PAPER run
 
@@ -150,10 +151,8 @@ if one is missing):
    .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
    ```
 4. Set `capital_usd` in the dashboard or `config\runtime.json`. This is the allocated
-   capital, not the wallet balance. It is the basis for the 2% planned-loss cap, which applies only
-   when `trade_size_usd` is null; in the default fixed-dollar mode the cap is not applied (a $1
-   trade on $5 capital risks about 20%). The daily loss cap is a fixed USDC amount
-   (`daily_loss_limit_usd`).
+   capital, not the wallet balance. The 2% planned-loss cap applies to both fixed-dollar and
+   percentage sizing. The daily loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
 5. Do not judge the strategy from a handful of trades. The statistical validation gate
    requires real recorded outcomes; it fails honestly on an empty database.
 
@@ -240,6 +239,8 @@ After three consecutive heartbeat failures the runtime state records the failure
 gate/protective checks fail. The heartbeat is key-wide: a timeout cancels all orders for
 the API key. Investigate the network and credentials before restarting. Never arm the
 heartbeat for testing outside an authorized LIVE activation.
+
+The engine synchronizes its market clock against the CLOB `/time` endpoint every 15 seconds while LIVE. A slow response or local clock drift beyond five seconds blocks LIVE entry and fails the activation gate. The engine also reads market `trading.secondsDelay` and requires enough entry-window time for that delay plus acknowledgement latency; malformed delay metadata blocks entry.
 
 The worker re-checks the whole heartbeat safety configuration (enabled flag, credentials,
 dedicated-key confirmation, interval and lease window, recorded arm test, LIVE activation)

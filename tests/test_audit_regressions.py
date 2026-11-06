@@ -97,6 +97,18 @@ def test_buy_idempotency_key_is_unchanged_and_still_blocks_duplicates(clock, rep
 
 
 @pytest.mark.parametrize("mode", ["PAPER", "LIVE", Mode.LIVE])
+def test_strategy_version_is_persisted_for_each_order(repo):
+    journal = OrderJournal(repo)
+    market = make_market()
+    intent = journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("5"),
+        limit_price=Decimal("0.50"), mode="PAPER",
+        strategy_version="momentum:ACTIVE:v1",
+    )
+    journal.persist_intent(intent, reserve_amount=Decimal(0))
+    assert repo.get_order(intent.client_order_id).strategy_version == "momentum:ACTIVE:v1"
+
+
 def test_order_mode_is_persisted_not_defaulted_to_paper(clock, repo, mode):
     journal = OrderJournal(repo)
     market = make_market()
@@ -124,6 +136,17 @@ def test_live_working_order_is_visible_to_the_exposure_ledger(clock, repo):
     assert ledger.entries_used(market.market_id, "LIVE") == 1
     assert len(repo.open_orders(mode="LIVE")) == 1
     assert len(repo.open_orders(mode="PAPER")) == 0
+
+
+def test_market_seconds_delay_is_parsed_fail_closed():
+    from btc5m_bot.engine import BotEngine
+    market = make_market()
+    market.raw["market"]["trading"] = {"secondsDelay": 3}
+    assert BotEngine._market_seconds_delay(market) == 3.0
+    market.raw["market"]["trading"] = {"secondsDelay": "not-a-number"}
+    assert BotEngine._market_seconds_delay(market) is None
+    market.raw["market"]["trading"] = {"secondsDelay": -1}
+    assert BotEngine._market_seconds_delay(market) is None
 
 
 def test_engine_never_drops_an_async_call_without_await():

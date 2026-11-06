@@ -190,6 +190,7 @@ class ReasonCode(str, Enum):
     GEO_BLOCKED = "GEO_BLOCKED"
     LIVE_GATE_FAILED = "LIVE_GATE_FAILED"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    CLOCK_UNSYNCED = "CLOCK_UNSYNCED"
 
 
 @dataclass(frozen=True)

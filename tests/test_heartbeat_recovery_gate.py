@@ -330,18 +330,19 @@ def _passing_context(**overrides) -> GateContext:
         heartbeat_configured=True,
         heartbeat_tested=True,
         statistical_validation_passed=True,
+        clock_sync_verified=True,
     )
     values.update(overrides)
     return GateContext(**values)
 
 
-def test_live_gate_has_twenty_three_conditions_and_fails_closed(repo):
+def test_live_gate_has_twenty_four_conditions_and_fails_closed(repo):
     gate = LiveGate(repo)
     report = gate.evaluate(GateContext())
-    assert len(report.conditions) == 23
+    assert len(report.conditions) == 24
     assert report.passed is False
     assert report.passed_count == 0
-    assert {c.number for c in report.failed} == set(range(1, 24))
+    assert {c.number for c in report.failed} == set(range(1, 25))
 
 
 def test_live_gate_requires_explicit_typed_confirmation(repo):
@@ -356,6 +357,11 @@ def test_live_gate_requires_explicit_typed_confirmation(repo):
     assert gate.activation_active() is True
     gate.revoke(actor="tester", reason="test complete")
     assert gate.activation_active() is False
+
+
+def test_live_gate_blocks_unsynchronized_exchange_clock(repo):
+    report = LiveGate(repo).evaluate(_passing_context(clock_sync_verified=False))
+    assert any(c.key == "exchange_clock" and not c.passed for c in report.conditions)
 
 
 def test_live_gate_blocks_unsafe_geo_balance_and_heartbeat(repo):
