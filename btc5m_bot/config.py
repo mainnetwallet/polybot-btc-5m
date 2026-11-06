@@ -408,14 +408,17 @@ class Settings(BaseSettings):
     clob_api_secret: SecretStr | None = None
     clob_api_passphrase: SecretStr | None = None
 
-    # Durable home for the dashboard Settings page. On hosts without a persistent disk (Render free)
-    # runtime.json is wiped on every restart, so every saved setting would be lost. Point this at any
-    # always-on database (Render Postgres, Neon, Supabase, ...) and every Settings save is written there
-    # first and loaded again on start. POLYBOT_SETTINGS_DATABASE_URL, or the standard DATABASE_URL that
-    # Render injects when a Postgres is linked. Unset = settings live in runtime.json only.
-    settings_database_url: SecretStr | None = Field(
+    # Durable database for EVERYTHING the bot stores: dashboard settings, orders, positions, paper
+    # trades, resolution rules, risk state, audit log. On hosts without a persistent disk (Render
+    # free) local files are wiped on every restart, so point this at any always-on Postgres
+    # (Render Postgres, Neon, Supabase, ...). POLYBOT_DATABASE_URL, or the standard DATABASE_URL that
+    # Render injects when a Postgres is linked. Unset = local SQLite file + runtime.json only.
+    # POLYBOT_SETTINGS_DATABASE_URL is the old name and is still read so existing deploys keep working.
+    database_url: SecretStr | None = Field(
         default=None,
-        validation_alias=AliasChoices("POLYBOT_SETTINGS_DATABASE_URL", "DATABASE_URL", "settings_database_url"),
+        validation_alias=AliasChoices(
+            "POLYBOT_DATABASE_URL", "POLYBOT_SETTINGS_DATABASE_URL", "DATABASE_URL", "database_url"
+        ),
     )
 
     # Persistent defaults. On hosts without a persistent disk (Render free) runtime.json and the
@@ -493,6 +496,38 @@ class Settings(BaseSettings):
         return self.data_path / self.db_filename
 
     @property
+    def external_database_url(self) -> str | None:
+        """The configured external database URL (normalised for SQLAlchemy), or None."""
+        if self.database_url is None:
+            return None
+        raw = self.database_url.get_secret_value().strip()
+        return normalize_database_url(raw) if raw else None
+
+    @property
+    def uses_external_database(self) -> bool:
+        return self.external_database_url is not None
+
+    @property
+    def database_target(self) -> "Path | str":
+        """What db.engine.make_engine takes: the external URL, else the local SQLite path."""
+        return self.external_database_url or self.db_path
+
+    @property
+    def sqlalchemy_database_url(self) -> str:
+        """Same target as a SQLAlchemy URL string (used by Alembic)."""
+        return self.external_database_url or f"sqlite:///{self.db_path.as_posix()}"
+
+    @property
+    def database_label(self) -> str:
+        """Human readable location with credentials removed, safe for logs and the CLI."""
+        url = self.external_database_url
+        if url is None:
+            return str(self.db_path)
+        from sqlalchemy.engine import make_url
+
+        return make_url(url).render_as_string(hide_password=True)
+
+    @property
     def parquet_path(self) -> Path:
         return self.data_path / self.parquet_dirname
 
@@ -525,8 +560,9 @@ def normalize_database_url(url: str) -> str:
 class SettingsDatabase:
     """Durable key/value row for RuntimeConfig, kept in an external database.
 
-    Only the dashboard settings live here (one small JSON document). Trading data stays in the local
-    SQLite file, so a database outage can never touch order handling, only saving/loading settings.
+    Only the dashboard settings live in this table (one small JSON document). It sits in the same
+    external database as the trading tables (POLYBOT_DATABASE_URL) but uses its own connection pool,
+    so a slow settings save never holds up order handling.
     """
 
     KEY = "runtime_config"
@@ -616,8 +652,7 @@ class ConfigStore:
 
     @classmethod
     def from_settings(cls, settings: "Settings") -> "ConfigStore":
-        url = settings.settings_database_url.get_secret_value() if settings.settings_database_url else None
-        return cls(settings.runtime_config_file, database_url=url or None)
+        return cls(settings.runtime_config_file, database_url=settings.external_database_url)
 
     @property
     def storage(self) -> dict[str, Any]:

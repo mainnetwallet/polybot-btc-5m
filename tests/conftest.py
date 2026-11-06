@@ -1,6 +1,7 @@
 """Shared deterministic fixtures. No network, no real funds, no wall-clock dependencies."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from btc5m_bot.clock import FixedClock
 from btc5m_bot.config import ConfigStore, Settings
 from btc5m_bot.db.engine import init_db, make_engine, make_session_factory
+from btc5m_bot.db.models import Base
 from btc5m_bot.db.repo import Repository
 from btc5m_bot.exchange.fake_adapter import FakeExchangeAdapter
 from btc5m_bot.security import hash_password
@@ -42,6 +44,7 @@ def settings(tmp_path: Path) -> Settings:
         clob_api_secret="test-secret",
         clob_api_passphrase="test-pass",
         default_capital_usd=None,
+        database_url=os.environ.get("POLYBOT_TEST_DATABASE_URL") or None,
     )
     s.ensure_dirs()
     return s
@@ -49,11 +52,17 @@ def settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 def db(settings: Settings):
-    engine = make_engine(settings.db_path)
+    # Set POLYBOT_TEST_DATABASE_URL to a throwaway Postgres to run the repository tests against it.
+    url = os.environ.get("POLYBOT_TEST_DATABASE_URL")
+    engine = make_engine(settings.database_target)
+    if url:
+        Base.metadata.drop_all(engine)
     init_db(engine)
     try:
         yield engine
     finally:
+        if url:
+            Base.metadata.drop_all(engine)
         engine.dispose()
 
 

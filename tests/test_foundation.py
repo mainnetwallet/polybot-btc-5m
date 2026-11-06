@@ -25,6 +25,8 @@ def test_real_clock_accepts_small_exchange_offset_and_rejects_large_drift():
 
 
 def test_sqlite_uses_full_synchronous_for_durable_order_journal(db):
+    if db.dialect.name != "sqlite":
+        pytest.skip("SQLite-only pragma")
     with db.connect() as conn:
         synchronous = conn.exec_driver_sql("PRAGMA synchronous").scalar_one()
     assert synchronous == 2  # SQLite FULL

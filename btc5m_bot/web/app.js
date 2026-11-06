@@ -1189,7 +1189,7 @@ function showSettingsStorage(storage) {
     node.textContent = "Saved to the database: settings survive restarts and redeploys.";
     node.className = "small saved";
   } else {
-    node.textContent = "Saved to a local file only: a host without a disk loses them on restart. Set DATABASE_URL to keep them.";
+    node.textContent = "Saved to a local file only: a host without a disk loses them on restart. Set POLYBOT_DATABASE_URL to keep them.";
     node.className = "small err";
   }
 }

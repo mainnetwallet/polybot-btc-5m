@@ -91,7 +91,7 @@ def make_lease_check(settings: Settings) -> LeaseCheck:
     """Build a read-only check of the engine liveness lease.
 
     Returns ``(reason_code, age_seconds)``; ``reason_code`` is ``None`` when the lease is fresh.
-    The SQLite engine is created lazily and never creates or migrates the schema: the engine
+    The database engine is created lazily and never creates or migrates the schema: the engine
     process owns that, and a missing table simply reports as not ready.
     """
     from .db.engine import make_engine, make_session_factory
@@ -104,9 +104,9 @@ def make_lease_check(settings: Settings) -> LeaseCheck:
     def _repo() -> Repository | None:
         with guard:
             if "repo" not in holder:
-                if not settings.db_path.exists():
+                if not settings.uses_external_database and not settings.db_path.exists():
                     return None
-                engine = make_engine(settings.db_path)
+                engine = make_engine(settings.database_target)
                 holder["engine"] = engine
                 holder["repo"] = Repository(make_session_factory(engine))
             return holder["repo"]

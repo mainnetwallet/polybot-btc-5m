@@ -138,16 +138,31 @@ def test_database_url_forms_and_env(monkeypatch, tmp_path):
     assert normalize_database_url("postgresql://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
     assert normalize_database_url("sqlite:///x.db") == "sqlite:///x.db"
 
-    for name in ("POLYBOT_SETTINGS_DATABASE_URL", "DATABASE_URL"):
+    for name in ("POLYBOT_DATABASE_URL", "POLYBOT_SETTINGS_DATABASE_URL", "DATABASE_URL"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h/db")
     s = Settings(data_dir=tmp_path, logs_dir=tmp_path, config_dir=tmp_path)
-    assert s.settings_database_url.get_secret_value() == "postgres://u:p@h/db"
+    assert s.database_url.get_secret_value() == "postgres://u:p@h/db"
     assert "p@h" not in repr(s)  # the password never shows up in logs
+    assert "p@h" not in s.database_label  # nor in the CLI / log label
+    assert s.database_target == "postgresql+psycopg://u:p@h/db"
     # the supervisor hands model_dump() to the engine subprocess: the field must survive that trip
-    assert Settings(**s.model_dump()).settings_database_url.get_secret_value() == "postgres://u:p@h/db"
-    monkeypatch.setenv("POLYBOT_SETTINGS_DATABASE_URL", "postgres://other/db2")
-    assert Settings(data_dir=tmp_path).settings_database_url.get_secret_value() == "postgres://other/db2"
+    assert Settings(**s.model_dump()).database_url.get_secret_value() == "postgres://u:p@h/db"
+    # the old variable name still works so existing deployments do not silently lose persistence
+    monkeypatch.setenv("POLYBOT_SETTINGS_DATABASE_URL", "postgres://legacy/db3")
+    assert Settings(data_dir=tmp_path).database_url.get_secret_value() == "postgres://legacy/db3"
+    # POLYBOT_DATABASE_URL wins over both
+    monkeypatch.setenv("POLYBOT_DATABASE_URL", "postgres://other/db2")
+    assert Settings(data_dir=tmp_path).database_url.get_secret_value() == "postgres://other/db2"
+
+
+def test_database_target_defaults_to_the_local_sqlite_file(monkeypatch, tmp_path):
+    for name in ("POLYBOT_DATABASE_URL", "POLYBOT_SETTINGS_DATABASE_URL", "DATABASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings(data_dir=tmp_path, logs_dir=tmp_path, config_dir=tmp_path)
+    assert not s.uses_external_database
+    assert s.database_target == s.db_path
+    assert s.sqlalchemy_database_url.startswith("sqlite:///")
 
 
 def test_settings_database_is_a_single_upserted_row(tmp_path):

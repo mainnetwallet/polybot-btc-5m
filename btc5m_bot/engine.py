@@ -1430,6 +1430,8 @@ class BotEngine:
     async def _maybe_backup(self, *, force: bool = False) -> None:
         if self.db_engine is None:
             return
+        if self.db_engine.dialect.name != "sqlite":
+            return  # hosted database: the provider owns backups, there is no local file to copy
         mono = self.clock.monotonic()
         if not force and mono - self._last_backup < BACKUP_SECONDS:
             return
@@ -2005,7 +2007,7 @@ class BotEngine:
 
 def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple[BotEngine, Any]:
     settings.ensure_dirs()
-    db_engine = make_engine(settings.db_path)
+    db_engine = make_engine(settings.database_target)
     init_db(db_engine)
     repo = Repository(make_session_factory(db_engine))
     config_store = ConfigStore.from_settings(settings)

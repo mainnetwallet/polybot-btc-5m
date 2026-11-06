@@ -244,8 +244,10 @@ unset capital, unhealthy feeds) still returns 200. Details and the full list of 
 
 From [Render's free-tier docs](https://render.com/docs/free). They decide what this deployment can do:
 
-- **No persistent disk.** The SQLite database, approved rules, paper trades, recordings and
-  `runtime.json` live under `/tmp/polybot` and are lost on every restart, redeploy and spin-down.
+- **No persistent disk.** Without `POLYBOT_DATABASE_URL`, the SQLite database, approved rules, paper
+  trades, recordings and `runtime.json` live under `/tmp/polybot` and are lost on every restart,
+  redeploy and spin-down. Set `POLYBOT_DATABASE_URL` (below) and only the parquet recordings and logs are
+  still lost.
 - **No Shell or SSH.** `approve-rule`, `status` and `backup` cannot be run; use the dashboard
   (Rules and Settings pages) instead. The dashboard is reachable on the public URL once
   `POLYBOT_DASHBOARD_PASSWORD_HASH` is set (see above).
@@ -254,14 +256,19 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
   free web services in the workspace, and one always-on service uses about 730 of them. When the
   hours run out, every free web service in the workspace is suspended until the next month.
 
-**Keep your Settings across restarts (recommended).** Create a free Postgres (Render Postgres, Neon or
-Supabase) and paste its connection URL into the Render variable `POLYBOT_SETTINGS_DATABASE_URL`
-(`DATABASE_URL` also works). Every save on the Settings page is then committed to that database first
-and loaded again on every start, so capital, trade size, limits, strategy, feature switches and the
-trading ON/OFF switch survive restarts, redeploys and spin-downs. If the database cannot be written the
-save is rejected with an error instead of silently reverting later. The Settings page shows whether saves
-are durable. Only the settings row lives in that database; paper trades and rules stay in the local
-SQLite file. Without the variable the behaviour below applies.
+**Keep everything across restarts (recommended).** Create a free Postgres (Render Postgres, Neon or
+Supabase) and paste its connection URL into the Render variable `POLYBOT_DATABASE_URL`
+(`DATABASE_URL` also works; the old name `POLYBOT_SETTINGS_DATABASE_URL` is still read). The bot then
+keeps **all** of its state in that one database: Settings, orders, positions, paper trades, approved
+resolution rules, risk state, exposure reservations and the audit log. Every save on the Settings page is
+committed to the database first and loaded again on every start, so capital, trade size, limits, strategy,
+feature switches and the trading ON/OFF switch survive restarts, redeploys and spin-downs. If the database
+cannot be written the save is rejected with an error instead of silently reverting later. The Settings
+page shows whether saves are durable. Tables are created automatically on start (or run
+`python -m btc5m_bot migrate`). Backups are the database provider's job (snapshots / point-in-time
+restore); `python -m btc5m_bot backup` only applies to the local SQLite file. Not stored in the database:
+parquet market recordings and log files (large and disposable), which still use `POLYBOT_DATA_DIR` /
+`POLYBOT_LOGS_DIR`. Without the variable the behaviour below applies.
 
 **Capital and rules have defaults; the trading switch does not.** Every start applies capital `5`
 (paper money) when none is set and auto-approves resolution rules in PAPER mode, so neither has to
@@ -272,8 +279,9 @@ trading option on the dashboard **Settings** page, not in environment variables.
 
 `.env` / Render variables hold only keys and passwords (dashboard hash and session secret, CLOB API
 credentials, wallet key) plus optional hosting options (ports, folders, heartbeat for LIVE).
-Resolution rules can also be approved from the Rules page. Note: on Render free the disk is wiped on
-every restart, so Settings you changed fall back to their defaults after a restart.
+Resolution rules can also be approved from the Rules page. Note: on Render free without
+`POLYBOT_DATABASE_URL` the disk is wiped on every restart, so Settings you changed fall back to their
+defaults after a restart.
 
 To operate the bot for real, switch to a paid plan with a disk: in `render.yaml` set
 `plan: starter`, uncomment the `disk` block and point the three `POLYBOT_*_DIR` variables at
@@ -408,9 +416,10 @@ acknowledgement window.
 
 ### Data
 
-SQLite (WAL, foreign keys, busy timeout) stores markets, windows, orders, positions,
-reservations, risk days/state, protections, heartbeat/recovery state, rules, resolutions,
-decisions, latency, trades, activations, audit, and equity snapshots.
+The database stores markets, windows, orders, positions, reservations, risk days/state, protections,
+heartbeat/recovery state, rules, resolutions, decisions, latency, trades, activations, audit, equity
+snapshots and the Settings page. It is a local SQLite file (WAL, foreign keys, busy timeout) by default, or
+the Postgres given in `POLYBOT_DATABASE_URL` (recommended on hosts without a persistent disk).
 
 Parquet datasets under `data\parquet\<dataset>\date=YYYY-MM-DD\`:
 

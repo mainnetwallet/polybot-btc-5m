@@ -41,7 +41,7 @@ def heartbeat_process_main(settings_dict: dict) -> None:
 
     settings = _Settings(**settings_dict)
     setup_logging(settings.logs_path, component="heartbeat")
-    engine = _make_engine(settings.db_path)
+    engine = _make_engine(settings.database_target)
     _init_db(engine)
     repo = _Repository(_make_session_factory(engine))
     clock = RealClock()

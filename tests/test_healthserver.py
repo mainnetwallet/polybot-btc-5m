@@ -126,6 +126,8 @@ def _write_lease(repo, *, age_seconds: float, healthy: bool = True, detail: str 
 
 
 def test_lease_check_without_database(settings):
+    if settings.uses_external_database:
+        pytest.skip("local-file check")
     assert not settings.db_path.exists()
     assert make_lease_check(settings)() == ("engine_lease_missing", None)
 

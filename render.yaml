@@ -19,10 +19,10 @@
 #             (HTTP(s) monitor, 5 min interval; GET or HEAD both work).
 #
 # FREE plan limits that matter here (see https://render.com/docs/free):
-#   * No persistent disk. The SQLite database, approved rules, paper trades, recordings and
-#     runtime.json live under /tmp/polybot and are lost on every restart, redeploy and spin-down.
-#     EXCEPT the Settings page: set POLYBOT_SETTINGS_DATABASE_URL (below) and every setting you save
-#     is kept in that external database and restored on start.
+#   * No persistent disk. Recordings (parquet), logs and the local runtime.json mirror live under
+#     /tmp/polybot and are lost on every restart, redeploy and spin-down. Everything that matters
+#     (Settings, orders, positions, paper trades, approved rules, risk state, audit log) is kept in
+#     the external database when you set POLYBOT_DATABASE_URL (below) and is restored on start.
 #   * No Shell/SSH, so CLI operator commands (approve-rule, status, backup) cannot be run; use the
 #     dashboard instead. Capital defaults to 5 and PAPER rules are auto-approved on every start, but
 #     the master trading switch is OFF after each start (runtime.json is wiped): turn it ON in the
@@ -74,12 +74,12 @@ services:
         sync: false
       - key: POLYBOT_SESSION_SECRET
         sync: false
-      # Durable home for the dashboard Settings page. Every Settings save is committed to this
-      # database first and loaded again on start, so settings survive restarts, redeploys and
-      # spin-downs even on the free plan (no disk needed). Paste the INTERNAL or external
-      # connection URL of a Postgres (Render Postgres, Neon, Supabase ...). Only the settings row is
-      # stored there; paper trades and rules still live in the local SQLite file.
-      - key: POLYBOT_SETTINGS_DATABASE_URL
+      # Durable database for EVERYTHING the bot stores: dashboard Settings (committed here first),
+      # orders, positions, paper trades, approved resolution rules, risk state and the audit log.
+      # They survive restarts, redeploys and spin-downs even on the free plan (no disk needed).
+      # Paste the INTERNAL or external connection URL of a Postgres (Render Postgres, Neon,
+      # Supabase ...). Unset = local SQLite file under POLYBOT_DATA_DIR (lost on the free plan).
+      - key: POLYBOT_DATABASE_URL
         sync: false
       - key: POLYBOT_CLOB_API_KEY
         sync: false

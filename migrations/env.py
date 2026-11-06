@@ -1,4 +1,4 @@
-"""Alembic environment bound to the configured POLYBOT SQLite database."""
+"""Alembic environment bound to the configured POLYBOT database (Postgres via POLYBOT_DATABASE_URL, else SQLite)."""
 from __future__ import annotations
 
 import sys
@@ -20,8 +20,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = load_settings()
-database_url = f"sqlite:///{settings.db_path.as_posix()}"
-config.set_main_option("sqlalchemy.url", database_url)
+database_url = settings.sqlalchemy_database_url
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
@@ -47,8 +47,9 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         # WAL keeps readers (dashboard/analytics) from blocking the engine while
         # a migration holds the writer lock.
-        connection.exec_driver_sql("PRAGMA journal_mode=WAL")
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

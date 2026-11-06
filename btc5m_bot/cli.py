@@ -24,7 +24,7 @@ def _settings() -> Settings:
 
 
 def _repo(settings: Settings) -> tuple[Repository, object]:
-    db = make_engine(settings.db_path)
+    db = make_engine(settings.database_target)
     init_db(db)
     return Repository(make_session_factory(db)), db
 
@@ -35,7 +35,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     store = ConfigStore.from_settings(settings)
     cfg = store.snapshot()
     db.dispose()
-    print(f"initialised database: {settings.db_path}")
+    print(f"initialised database: {settings.database_label}")
     print(f"runtime config:       {settings.runtime_config_file} (mode={cfg.mode.value}, capital={cfg.capital_usd})")
     print("next steps:")
     print("  1. python -m btc5m_bot hash-password > hash.txt      # set POLYBOT_DASHBOARD_PASSWORD_HASH")
@@ -121,8 +121,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_backup(args: argparse.Namespace) -> int:
     settings = _settings()
-    db = make_engine(settings.db_path)
+    db = make_engine(settings.database_target)
     try:
+        if db.dialect.name != "sqlite":
+            print("hosted database: backups are handled by your database provider (snapshots / point-in-time restore).")
+            return 0
         dest = settings.data_path / "backups" / f"manual-{__import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
         path = backup_database(db, dest)
         print(f"backup written: {path}")
@@ -189,9 +192,10 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     root = Path(__file__).resolve().parent.parent
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "migrations"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{settings.db_path.as_posix()}")
+    # Alembic's config parser treats % as interpolation, so escape it (passwords may contain it).
+    config.set_main_option("sqlalchemy.url", settings.sqlalchemy_database_url.replace("%", "%%"))
     command.upgrade(config, "head")
-    print(f"database migrated to head: {settings.db_path}")
+    print(f"database migrated to head: {settings.database_label}")
     return 0
 
 

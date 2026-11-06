@@ -403,12 +403,12 @@ class Repository:
 
     def active_reserved_total(self) -> Decimal:
         with session_scope(self._sf) as s:
-            total = s.scalar(
-                select(func.coalesce(func.sum(ExposureReservationRow.amount), "0")).where(
-                    ExposureReservationRow.status == "ACTIVE"
-                )
-            )
-        return Decimal(str(total or 0))
+            amounts = s.scalars(
+                select(ExposureReservationRow.amount).where(ExposureReservationRow.status == "ACTIVE")
+            ).all()
+        # amount is stored as exact decimal text; summing in Python is exact and works on Postgres,
+        # where SUM(varchar) is an error (SQLite silently coerced it to a float).
+        return sum((Decimal(str(a)) for a in amounts if a is not None), Decimal("0"))
 
     def active_reservations(self) -> list[ExposureReservationRow]:
         with session_scope(self._sf) as s:

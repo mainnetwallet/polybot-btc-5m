@@ -9,7 +9,7 @@ This is the operator runbook. It assumes Windows and the project layout created 
 |---|---|
 | `.env` | secrets and infrastructure settings; never commit |
 | `config\runtime.json` | persisted trading settings; starts in PAPER |
-| `data\polybot.db` | SQLite state (WAL) |
+| `data\polybot.db` | SQLite state (WAL); not used when `POLYBOT_DATABASE_URL` points at Postgres |
 | `data\polybot.lock` | single-instance lock |
 | `data\STOP` | graceful shutdown request |
 | `data\supervisor.json` | supervisor status snapshot |
@@ -177,7 +177,9 @@ Changing mode to LIVE in `runtime.json` is not enough to trade live. See
 
 ## Backup and restore
 
-Backups use SQLite `VACUUM INTO`, so they are consistent without stopping writes. They are
+With `POLYBOT_DATABASE_URL` set (hosted Postgres) the provider's snapshots / point-in-time restore are
+the backup, and `backup` prints a note instead of writing a file. The rest of this section is for the
+local SQLite file. Backups use SQLite `VACUUM INTO`, so they are consistent without stopping writes. They are
 created every six hours while the engine runs, and on demand:
 
 ```bat
