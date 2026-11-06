@@ -402,3 +402,16 @@ def test_stream_pushes_strict_json_when_analytics_has_no_losses(client):
         raw = ws.receive_text()
     message = json.loads(raw, parse_constant=reject_constant)
     assert message["state"]["analytics"]["paper"]["profit_factor"] is None
+
+
+def test_statistical_gate_threshold_is_not_dashboard_writable(client):
+    # paper_validation_min_trades feeds the LIVE statistical gate. Lowering it to 1 from the
+    # dashboard would let a handful of trades pass validation, so it is config-file only.
+    test_client, _engine, store = client
+    headers = login(test_client)
+    before = store.snapshot().paper_validation_min_trades
+    response = test_client.post("/api/config", json={"patch": {"paper_validation_min_trades": 1}}, headers=headers)
+    assert response.status_code == 400
+    assert "paper_validation_min_trades" in response.json()["detail"]
+    assert store.snapshot().paper_validation_min_trades == before
+    assert "paper_validation_min_trades" not in test_client.get("/static/app.js").text

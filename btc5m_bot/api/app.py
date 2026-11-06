@@ -68,7 +68,6 @@ CONFIG_WRITABLE = {
     "fee_buffer",
     "auto_approve_rules",
     "min_order_notional_usd",
-    "paper_validation_min_trades",
 }
 
 PHRASES = {

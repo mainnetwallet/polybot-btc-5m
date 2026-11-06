@@ -1006,7 +1006,6 @@ const ADV_FIELDS = [
   { key: "taker_delay_ms", label: "Paper taker delay (ms)", kind: "num", step: "1" },
   { key: "fee_buffer", label: "Fee buffer (USDC per share)", kind: "num", step: "0.001" },
   { key: "min_order_notional_usd", label: "Exchange minimum order (USDC, empty = share minimum)", kind: "num", step: "0.01", nullable: true },
-  { key: "paper_validation_min_trades", label: "Paper validation: min trades", kind: "num", step: "1" },
 ];
 
 function buildAdvancedFields() {
