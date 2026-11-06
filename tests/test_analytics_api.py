@@ -27,6 +27,7 @@ def trade(pnl, *, kind="SETTLEMENT", price="0.50", shares="10", fee="0.05", day=
         kind=kind,
         ts=START + timedelta(days=day),
         market_id=f"mkt-{pnl}-{day}",
+        client_order_id=f"order-{day}",
         outcome="UP",
         side="SETTLE",
         mode="PAPER",
