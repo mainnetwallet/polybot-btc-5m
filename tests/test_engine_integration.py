@@ -376,3 +376,23 @@ def test_default_capital_env_applied_on_boot(tmp_path, monkeypatch):
         assert engine.config_store.snapshot().capital_usd == Decimal("500")
     finally:
         db_engine.dispose()
+
+
+def test_repeated_no_trade_reason_is_logged_once_per_minute(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())  # discovers the market
+    before = len(repo.recent_decisions(500))
+
+    for _ in range(20):  # 40 s of the same reason, as in the 120-second-window-closed spam
+        engine._note(clock.now(), "NO_TRADE", ReasonCode.ENTRY_WINDOW_CLOSED, "120-second entry window closed")
+        clock.advance(2)
+    assert len(repo.recent_decisions(500)) - before == 1
+
+    clock.advance(60)  # heartbeat after a minute
+    engine._note(clock.now(), "NO_TRADE", ReasonCode.ENTRY_WINDOW_CLOSED, "120-second entry window closed")
+    assert len(repo.recent_decisions(500)) - before == 2
+
+    clock.advance(2)  # a different reason is logged right away
+    engine._note(clock.now(), "NO_TRADE", ReasonCode.TRADING_OFF, "trading switch is OFF")
+    assert len(repo.recent_decisions(500)) - before == 3

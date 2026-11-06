@@ -75,6 +75,9 @@ DISCOVERY_SECONDS = 15.0
 GATE_REFRESH_SECONDS = 60.0
 BOOK_RECORD_SECONDS = 2.0
 DECISION_LOG_SECONDS = 2.0
+# A NO_TRADE that repeats the previous reason for the same market is a heartbeat, not news:
+# it is logged at most this often. A different reason is still logged right away (see above).
+DECISION_REPEAT_LOG_SECONDS = 60.0
 BALANCE_REFRESH_SECONDS = 15.0
 BACKUP_SECONDS = 6 * 3600
 BACKUP_MAX_AGE_DAYS = 7
@@ -165,7 +168,7 @@ class BotEngine:
         self._fatal = False
         self._last_discovery = 0.0
         self._last_balance = 0.0
-        self._last_decision_log: dict[str, float] = {}
+        self._last_decision_log: dict[str, tuple[float, str]] = {}
         self._last_book_record: dict[str, float] = {}
         self._last_exit_attempt: dict[str, float] = {}
         self._last_simulation: dict[str, float] = {}
@@ -1234,9 +1237,13 @@ class BotEngine:
             **({"extra": extra} if extra else {}),
         }
         mono = self.clock.monotonic()
-        if decision == "NO_TRADE" and mono - self._last_decision_log.get(market_id, 0.0) < DECISION_LOG_SECONDS:
-            return
-        self._last_decision_log[market_id] = mono
+        previous = self._last_decision_log.get(market_id)
+        if decision == "NO_TRADE" and previous is not None:
+            same_reason = previous[1] == reason.value
+            min_gap = DECISION_REPEAT_LOG_SECONDS if same_reason else DECISION_LOG_SECONDS
+            if mono - previous[0] < min_gap:
+                return
+        self._last_decision_log[market_id] = (mono, reason.value)
         try:
             self.repo.log_decision(
                 market_id=market_id,
