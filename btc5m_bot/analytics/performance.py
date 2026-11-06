@@ -1,7 +1,6 @@
 """Actual performance measurement from recorded trades. No synthetic statistics."""
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -65,7 +64,9 @@ def compute_performance(trades: Iterable) -> PerformanceSummary:
     gross_profit = sum((p for p in pnls if p > 0), Decimal(0))
     gross_loss = -sum((p for p in pnls if p < 0), Decimal(0))
     win_rate = wins / len(pnls) if pnls else None
-    profit_factor = float(gross_profit / gross_loss) if gross_loss > 0 else (None if not pnls else math.inf)
+    # Undefined without a losing trade. Never math.inf: it is not valid JSON (the websocket stream
+    # would push a literal Infinity the browser cannot parse); None renders as "no data".
+    profit_factor = float(gross_profit / gross_loss) if gross_loss > 0 else None
     expectancy = net / len(pnls) if pnls else None
     win_vals = [p for p in pnls if p > 0]
     loss_vals = [p for p in pnls if p < 0]

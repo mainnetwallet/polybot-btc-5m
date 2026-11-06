@@ -373,3 +373,32 @@ def test_config_api_returns_400_for_out_of_range_tunables(client):
         assert response.status_code == 400, patch
         assert "invalid configuration" in response.json()["detail"]
     assert store.snapshot().cooldown_minutes == before
+
+
+# ---------------------------------------------------------------- strict JSON
+# profit_factor used to be math.inf when a run had no losing trade (and for all-flat runs). inf is
+# not valid JSON. The HTTP endpoints hide it (pydantic turns inf into null) but the websocket
+# stream uses json.dumps, which wrote a literal ``Infinity`` the browser's JSON.parse rejects.
+@pytest.mark.parametrize("pnls", [["5.00"], ["5.00", "1.00"], ["0", "0"]])
+def test_performance_summary_is_strict_json_without_losses(pnls):
+    import json
+
+    summary = compute_performance([trade(p, day=i) for i, p in enumerate(pnls)])
+    assert summary.profit_factor is None  # undefined without a loss, never infinity
+    json.dumps(summary.as_dict(), allow_nan=False)
+
+
+def test_stream_pushes_strict_json_when_analytics_has_no_losses(client):
+    import json
+
+    def reject_constant(name):  # what a browser's JSON.parse does with Infinity / NaN
+        raise ValueError(f"non-standard JSON constant {name}")
+
+    test_client, engine, _ = client
+    login(test_client)
+    analytics = {"paper": compute_performance([trade("5.00")]).as_dict()}
+    engine.state = SimpleNamespace(snapshot=lambda: {"mode": "PAPER", "analytics": analytics})
+    with test_client.websocket_connect("/api/stream") as ws:
+        raw = ws.receive_text()
+    message = json.loads(raw, parse_constant=reject_constant)
+    assert message["state"]["analytics"]["paper"]["profit_factor"] is None
