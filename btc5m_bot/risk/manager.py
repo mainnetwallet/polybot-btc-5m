@@ -97,6 +97,10 @@ class RiskManager:
 
     def status(self, mode: Mode, *, balance: Decimal | None = None, now: datetime | None = None) -> RiskStatus:
         now = as_utc(now or self.clock.now())
+        # The engine gates entries on status().allowed *before* pre_trade_check ever runs, so an
+        # expired cooldown has to be served here too. Without it the stale loss streak keeps
+        # status() on CONSECUTIVE_LOSS_LIMIT forever and the bot can never trade again.
+        self._sync_cooldown(now)
         cfg = self._cfg()
         capital = self.capital()
         day = self.repo.get_risk_day(self._today(now))
@@ -317,9 +321,32 @@ class RiskManager:
         self.repo.add_protection_event("KILL_SWITCH_CLEARED", "WARN", actor=actor, reason=reason)
         self.repo.audit("KILL_SWITCH_CLEARED", actor=actor, detail={"reason": reason})
 
-    def reset_day_lock(self, *, actor: str, reason: str) -> None:
-        """Explicit, audited override for a daily lock. Never touches cooldown or kill switch."""
+    def reset_day_lock(self, *, actor: str, reason: str) -> dict:
+        """Explicit, audited override for a daily lock. Never touches cooldown or kill switch.
+
+        Returns ``will_relock``: a daily-LOSS lock is re-derived from realized P&L on the next
+        entry check, so clearing the flag alone does not resume trading while the day's P&L is
+        still at or below the loss limit. Callers (API/UI) should tell the operator.
+        """
         now = self.clock.now()
         day = self.repo.get_risk_day(self._today(now))
+        limit = self._cfg().daily_loss_limit_usd
+        was_locked = day.locked
         self.repo.update_risk_day(day.trading_day, locked=False, profit_lock_triggered=False)
-        self.repo.audit("DAY_LOCK_RESET", actor=actor, detail={"reason": reason, "day": day.trading_day.isoformat()})
+        will_relock = day.realized_pnl <= -limit
+        self.repo.audit(
+            "DAY_LOCK_RESET",
+            actor=actor,
+            detail={
+                "reason": reason,
+                "day": day.trading_day.isoformat(),
+                "was_locked": was_locked,
+                "will_relock": will_relock,
+            },
+        )
+        return {
+            "was_locked": was_locked,
+            "will_relock": will_relock,
+            "daily_pnl": str(day.realized_pnl),
+            "daily_loss_limit": str(limit),
+        }

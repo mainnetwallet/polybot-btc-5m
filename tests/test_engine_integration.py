@@ -432,3 +432,49 @@ def test_paper_settles_from_oracle_simulation_when_onchain_resolution_lags(setti
     assert position.status == "SETTLED"
     assert machine.state is MarketState.SETTLED
     assert any(t.kind == "SETTLEMENT" for t in repo.list_trades(limit=10))
+
+
+def test_invalid_oracle_simulation_is_retried_until_it_is_valid(settings, repo, adapter, config_store):
+    """An early 'not enough oracle coverage' result used to be cached forever, so paper positions
+    could never settle from the simulation and stayed open until on-chain resolution."""
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())
+    calls: list[int] = []
+
+    def fake_attempt(machine, now):
+        calls.append(1)
+        engine._simulations[machine.market.market_id] = (
+            None,
+            SimpleNamespace(valid=len(calls) >= 2, outcome=Outcome.UP, reason="coverage 20% < 40%"),
+        )
+
+    engine._attempt_simulation = fake_attempt
+    clock.advance(310)
+    asyncio.run(engine._settle_windows(clock.now()))
+    assert len(calls) == 1 and engine._simulations[market.market_id][1].valid is False
+
+    clock.advance(1)  # inside the 5 s throttle: no retry yet
+    asyncio.run(engine._settle_windows(clock.now()))
+    assert len(calls) == 1
+
+    clock.advance(6)  # throttle elapsed and the cached result is invalid: try again
+    asyncio.run(engine._settle_windows(clock.now()))
+    assert len(calls) == 2 and engine._simulations[market.market_id][1].valid is True
+
+    clock.advance(6)  # a valid simulation is final: never recomputed
+    asyncio.run(engine._settle_windows(clock.now()))
+    assert len(calls) == 2
+
+
+def test_dashboard_edits_of_taker_delay_and_oracle_coverage_apply_without_restart(
+    settings, repo, adapter, config_store
+):
+    clock = FixedClock(START)
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)
+    assert engine.paper.taker_delay_ms != 7
+    config_store.update({"taker_delay_ms": 7, "min_oracle_coverage_seconds": 33})
+    asyncio.run(engine._iteration())
+    assert engine.paper.taker_delay_ms == 7
+    assert engine.execution.taker_delay_ms == 7
+    assert engine.probability_engine.min_coverage_seconds == 33.0

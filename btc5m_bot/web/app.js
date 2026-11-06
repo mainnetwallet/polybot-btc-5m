@@ -675,8 +675,10 @@ $("kill-clear").addEventListener("click", async () => {
 
 $("reset-day").addEventListener("click", async () => {
   try {
-    await post("/api/control/reset-day", { phrase: $("reset-phrase").value, reason: "operator reset" });
-    report("day lock reset");
+    const res = await post("/api/control/reset-day", { phrase: $("reset-phrase").value, reason: "operator reset" });
+    report(res && res.will_relock
+      ? "day lock cleared, but daily P&L (" + res.daily_pnl + ") is still at the loss limit (-" + res.daily_loss_limit + ") so it will re-lock on the next entry check"
+      : "day lock reset");
     $("reset-phrase").value = "";
   } catch (err) { report("reset failed: " + err.message); }
 });

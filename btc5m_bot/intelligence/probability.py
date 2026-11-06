@@ -75,11 +75,20 @@ class ProbabilityEngine:
         window = float(self.twap_window_seconds)
         if rem <= 0:
             return None
-        # Stdev of the future price average over the remaining part of the TWAP window.
+        # Stdev (in units of per-second vol * price) of the final TWAP, i.e. the average of the
+        # price over the last `window` seconds, modelling the price as a random walk.
+        #   rem <= window: part of the window is already observed; only the last `rem` seconds are
+        #                  still random:                     sd = sqrt(rem^3 / 3) / window
+        #   rem >  window: the whole window is still in the future. The price first diffuses for
+        #                  a = rem - window seconds, then is averaged over the window:
+        #                      Var = a + window/3 = rem - 2*window/3
+        # The two agree at rem == window (sqrt(window/3)). Entries happen with 180-300 s left, so the
+        # second branch is the one that matters: using the constant sqrt(window/3) there understated
+        # sigma by ~3x and made the model badly overconfident.
         if rem <= window:
             factor = math.sqrt((rem ** 3) / 3.0) / window
         else:
-            factor = math.sqrt(window / 3.0)
+            factor = math.sqrt(rem - 2.0 * window / 3.0)
         sigma = float(f.btc_price) * vol * factor
         sigma = max(sigma, float(f.btc_price) * 1e-6)
 

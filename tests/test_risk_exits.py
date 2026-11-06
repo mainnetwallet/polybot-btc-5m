@@ -511,3 +511,67 @@ def test_capital_follows_wallet_balance_only_when_safe():
     assert target(balance=D("100"), current_capital=D("100"), flat=True, day_trades=0) is None
     assert target(balance=None, current_capital=D("100"), flat=True, day_trades=0) is None
     assert target(balance=D("0"), current_capital=D("100"), flat=True, day_trades=0) is None
+
+
+# --------------------------------------------------------------------------- audit regressions
+def test_status_does_not_deadlock_after_cooldown_expires(clock, repo):
+    """The engine gates entries on risk.status().allowed, so status() itself must see an
+    expired cooldown as served. Otherwise the bot sticks on CONSECUTIVE_LOSS_LIMIT forever."""
+    risk = manager(clock, repo)
+    risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
+    risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
+    during = risk.status(Mode.PAPER, balance=CAPITAL)
+    assert not during.allowed and during.reason is ReasonCode.COOLDOWN
+
+    clock.advance(15 * 60 + 1)
+    after = risk.status(Mode.PAPER, balance=CAPITAL)
+    assert after.allowed, (after.reason, after.detail)
+    assert after.consecutive_losses == 0 and after.cooldown_until is None
+    # and the entry-time check agrees with the gate
+    ok, reason, _ = risk.pre_trade_check(
+        market_id="c", mode=Mode.PAPER, planned_loss=Decimal("1"),
+        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+    )
+    assert ok and reason is ReasonCode.OK
+
+
+def test_status_still_blocks_while_cooldown_is_running(clock, repo):
+    risk = manager(clock, repo)
+    risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
+    risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
+    clock.advance(14 * 60)
+    st = risk.status(Mode.PAPER, balance=CAPITAL)
+    assert not st.allowed and st.reason is ReasonCode.COOLDOWN
+    assert st.consecutive_losses == 2
+
+
+def test_cooldown_expiry_does_not_clear_a_daily_lock(clock, repo):
+    risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("1.5")))
+    risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
+    risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
+    clock.advance(15 * 60 + 1)
+    st = risk.status(Mode.PAPER, balance=CAPITAL)
+    assert not st.allowed and st.reason is ReasonCode.DAILY_LOSS_LIMIT
+
+
+def test_reset_day_lock_warns_when_loss_limit_will_relock(clock, repo):
+    risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("1.5")))
+    risk.record_result(realized_pnl=Decimal("-1.6"), market_id="a", mode=Mode.PAPER)
+    assert repo.get_risk_day(START.date()).locked is True
+    out = risk.reset_day_lock(actor="tester", reason="review")
+    assert out["was_locked"] is True and out["will_relock"] is True
+    assert out["daily_pnl"] == "-1.60" or Decimal(out["daily_pnl"]) == Decimal("-1.6")
+    # the lock really does come straight back on the next entry check
+    allowed, reason, _ = risk.pre_trade_check(
+        market_id="b", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
+        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+    )
+    assert not allowed and reason is ReasonCode.DAILY_LOSS_LIMIT
+
+
+def test_reset_day_lock_after_profit_lock_does_not_relock(clock, repo):
+    risk = manager(clock, repo, config(daily_profit_lock_pct=Decimal("0.01")))
+    risk.record_result(realized_pnl=Decimal("11"), market_id="a", mode=Mode.PAPER)
+    assert repo.get_risk_day(START.date()).profit_lock_triggered is True
+    out = risk.reset_day_lock(actor="tester", reason="review")
+    assert out["will_relock"] is False

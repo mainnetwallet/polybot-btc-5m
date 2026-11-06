@@ -3,7 +3,7 @@ from .regimes import RegimeDetector, RegimeState
 from .filters import FilterEngine, FilterReport
 from .probability import ProbabilityEngine, ProbabilityEstimate
 from .strategies import StrategyRegistry, StrategySignal
-from .ev import EdgeEstimate, evaluate_edge
+from .ev import EdgeEstimate, evaluate_edge, rejection_reason
 
 __all__ = [
     "FeatureSnapshot",
@@ -20,4 +20,5 @@ __all__ = [
     "StrategySignal",
     "EdgeEstimate",
     "evaluate_edge",
+    "rejection_reason",
 ]

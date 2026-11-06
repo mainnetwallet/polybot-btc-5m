@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from ..db.repo import DuplicateOrderError, Repository
-from ..types import MarketInfo, OrderIntent, OrderResult, OrderStatus, Outcome, Side, utcnow
+from ..types import MarketInfo, Mode, OrderIntent, OrderResult, OrderStatus, Outcome, Side, utcnow
 
 
 class OrderJournal:
@@ -23,14 +23,24 @@ class OrderJournal:
         shares: Decimal,
         limit_price: Decimal,
         order_type: str = "FOK",
-        mode: str,
+        mode: str | Mode,
         strategy_version: str = "BOT_BASELINE",
         reason: str = "",
         now: datetime | None = None,
         usdc_amount: Decimal | None = None,
     ) -> OrderIntent:
         client_order_id = uuid.uuid4().hex
+        order_mode = mode if isinstance(mode, Mode) else Mode(str(mode).upper())
         material = f"{market.market_id}:{side.value}:{outcome.value}:{shares}:{limit_price}:{order_type}"
+        if side is Side.SELL:
+            # An exit is retried whenever a FOK sell fails to fill. With identical size and price the
+            # key would be identical too, the UNIQUE constraint would reject every retry, and the
+            # engine would swallow that as a "duplicate" - leaving a stop-loss that never re-fires.
+            # Number the attempts so a retry is a new order. Double-submission is still prevented by
+            # the engine's unresolved-order check and per-position throttle. BUY keys are unchanged.
+            attempt = self.repo.count_orders(market_id=market.market_id, mode=order_mode.value, side=side.value)
+            if attempt:
+                material += f":attempt{attempt}"
         idempotency_key = hashlib.sha256(material.encode()).hexdigest()
         return OrderIntent(
             client_order_id=client_order_id,
@@ -43,6 +53,7 @@ class OrderJournal:
             shares=shares,
             limit_price=limit_price,
             order_type=order_type,
+            mode=order_mode,
             strategy_version=strategy_version,
             created_at=now or utcnow(),
             reason=reason,

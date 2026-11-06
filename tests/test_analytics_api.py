@@ -90,6 +90,7 @@ def test_validation_fails_honestly_on_empty_database(repo):
 class StubRisk:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.reset_result: dict | None = None
 
     def engage_kill_switch(self, reason, *, actor="system", detail=None):
         self.calls.append(("engage", reason))
@@ -99,6 +100,7 @@ class StubRisk:
 
     def reset_day_lock(self, *, actor, reason):
         self.calls.append(("reset", reason))
+        return self.reset_result
 
 
 class StubEngine:
@@ -196,6 +198,19 @@ def test_operator_controls_require_typed_phrases(client):
     assert test_client.post("/api/live/revoke", json={"phrase": "REVOKE LIVE"}, headers=headers).status_code == 200
     assert engine.risk.calls == [("engage", "drill"), ("clear", "")]
     assert engine.revocations == ["operator"]
+
+
+def test_reset_day_reports_whether_the_lock_will_come_back(client):
+    test_client, engine, _ = client
+    headers = login(test_client)
+    engine.risk.reset_result = {
+        "was_locked": True, "will_relock": True, "daily_pnl": "-1.60", "daily_loss_limit": "1.50",
+    }
+    res = test_client.post("/api/control/reset-day", json={"phrase": "RESET DAY"}, headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True and body["will_relock"] is True
+    assert body["daily_pnl"] == "-1.60"
 
 
 def test_live_activation_requires_the_exact_phrase(client):
