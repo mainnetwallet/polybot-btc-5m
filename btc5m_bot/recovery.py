@@ -15,6 +15,7 @@ from typing import Callable
 from .clock import Clock
 from .db.repo import Repository
 from .exchange.base import ExchangeAdapter, ExchangeOpenOrder, ExchangePosition
+from .exchange.fees import FeeSchedule, taker_fee
 from .types import Mode, OrderStatus, RecoveryState, as_utc
 
 log = logging.getLogger(__name__)
@@ -197,10 +198,9 @@ class RecoveryManager:
                 return True
             if matched > 0:
                 if row.side.upper() != "BUY":
-                    blocks.append(
-                        f"exit order {row.client_order_id} has recovered fills but trade-level fill price/fee reconciliation is unavailable"
+                    return await self._reconcile_sell_order(
+                        row, position=position, current=current, now=now, notes=notes, blocks=blocks
                     )
-                    return False
                 if position is None or Decimal(position.avg_price or 0) <= 0:
                     blocks.append(
                         f"buy order {row.client_order_id} has {matched} matched shares but the exchange position/average fill price is not yet visible"
@@ -261,10 +261,9 @@ class RecoveryManager:
         # Order not found on the exchange. If the matching position proves a fill, adopt it.
         if position is not None and Decimal(position.size) > 0:
             if row.side.upper() != "BUY":
-                blocks.append(
-                    f"exit order {row.client_order_id} is absent from open orders but its position changed; trade-level fill reconciliation is required"
+                return await self._reconcile_sell_order(
+                    row, position=position, current=None, now=now, notes=notes, blocks=blocks
                 )
-                return False
             if Decimal(position.avg_price or 0) <= 0 or Decimal(position.size) > Decimal(row.shares) + SIZE_TOLERANCE:
                 blocks.append(
                     f"exchange position for {row.client_order_id} cannot be safely attributed to this order"
@@ -294,6 +293,130 @@ class RecoveryManager:
             f"order {row.client_order_id} ({row.exchange_order_id}) is neither open nor provably filled; manual verification required"
         )
         return False
+
+    async def _reconcile_sell_order(
+        self, row, *, position: ExchangePosition | None, current: ExchangeOpenOrder | None,
+        now: datetime, notes: list[str], blocks: list[str],
+    ) -> bool:
+        if row.order_type.upper() not in {"FOK", "FAK"}:
+            blocks.append(f"SELL order {row.client_order_id} is not an immediate-or-cancel order; refusing to infer terminal state")
+            return False
+        if current is not None:
+            current_status = str(current.status or "").lower()
+            if current_status not in {"matched", "filled", "cancelled", "canceled", "expired"}:
+                cancelled = await self.adapter.cancel_order(row.exchange_order_id)
+                if not cancelled:
+                    blocks.append(f"SELL order {row.client_order_id} could not be cancelled before fill reconciliation")
+                    return False
+                try:
+                    current = await self.adapter.get_order(row.exchange_order_id)
+                except Exception as exc:
+                    blocks.append(f"SELL order {row.client_order_id} cancellation status unavailable: {exc}")
+                    return False
+                if current is not None and str(current.status or "").lower() not in {"matched", "filled", "cancelled", "canceled", "expired"}:
+                    blocks.append(f"SELL order {row.client_order_id} cancellation is not terminal")
+                    return False
+        try:
+            fills = await self.adapter.get_order_fills(
+                order_id=row.exchange_order_id, asset_id=row.asset_id,
+                start=row.created_at, end=now,
+            )
+        except Exception as exc:
+            blocks.append(f"SELL order {row.client_order_id} trade history unavailable: {exc}")
+            return False
+        if not fills:
+            blocks.append(f"SELL order {row.client_order_id} has no confirmed order-attributed fills")
+            return False
+        if any(
+            f.order_id != row.exchange_order_id or f.asset_id != row.asset_id
+            or f.condition_id != row.condition_id or f.side.upper() != "SELL"
+            or f.trader_side.upper() != "TAKER" or f.status.upper() != "CONFIRMED"
+            or not f.transaction_hash
+            for f in fills
+        ):
+            blocks.append(f"SELL order {row.client_order_id} has unconfirmed or inconsistent trade records")
+            return False
+        market = self.repo.get_market(row.market_id)
+        if market is None:
+            blocks.append(f"SELL order {row.client_order_id} has no persisted fee schedule")
+            return False
+        schedule = FeeSchedule(
+            rate=Decimal(market.fee_rate), exponent=int(market.fee_exponent),
+            taker_only=bool(market.taker_only), rebate_rate=Decimal(market.rebate_rate),
+            enabled=bool(market.fees_enabled),
+        )
+        if not schedule.enabled and any(f.fee_rate_bps != 0 for f in fills):
+            blocks.append(f"SELL order {row.client_order_id} fee schedule disagrees with venue trade records")
+            return False
+        expected_bps = schedule.rate * Decimal(10000) if schedule.enabled else Decimal(0)
+        if any(abs(f.fee_rate_bps - expected_bps) > Decimal("1") for f in fills):
+            blocks.append(f"SELL order {row.client_order_id} venue fee rate differs from persisted market schedule")
+            return False
+        total_shares = sum((f.shares for f in fills), Decimal(0))
+        total_gross = sum((f.shares * f.price for f in fills), Decimal(0))
+        total_fee = sum((taker_fee(f.shares, f.price, schedule) for f in fills), Decimal(0))
+        prior_shares = Decimal(row.filled_shares or 0)
+        prior_fee = Decimal(row.fee_usd or 0)
+        prior_gross = prior_shares * Decimal(row.avg_price or 0)
+        if total_shares < prior_shares - SIZE_TOLERANCE or total_shares > Decimal(row.shares) + SIZE_TOLERANCE:
+            blocks.append(f"SELL order {row.client_order_id} recovered fill quantity is inconsistent")
+            return False
+        delta_shares = max(Decimal(0), total_shares - prior_shares)
+        delta_gross = total_gross - prior_gross
+        delta_fee = max(Decimal(0), total_fee - prior_fee)
+        if delta_shares > 0 and position is None:
+            blocks.append(f"SELL order {row.client_order_id} remaining exchange position is unavailable")
+            return False
+        local_position = self.repo.get_position(row.market_id, self.mode.value)
+        if local_position is None or local_position.shares <= 0:
+            blocks.append(f"SELL order {row.client_order_id} has no local open position to reconcile")
+            return False
+        if delta_shares > local_position.shares + SIZE_TOLERANCE:
+            blocks.append(f"SELL order {row.client_order_id} recovered shares exceed the remaining local position")
+            return False
+        remaining = max(Decimal(0), local_position.shares - delta_shares)
+        if position is not None and abs(Decimal(position.size) - remaining) > SIZE_TOLERANCE:
+            blocks.append(f"SELL order {row.client_order_id} exchange position {position.size} does not match expected {remaining}")
+            return False
+        if position is None and remaining > SIZE_TOLERANCE:
+            blocks.append(f"SELL order {row.client_order_id} position is missing but expected {remaining} shares to remain")
+            return False
+        if delta_shares <= 0:
+            delta_avg = Decimal(0)
+            realized = Decimal(0)
+            allocated_cost = Decimal(0)
+            remaining_fee_basis = local_position.entry_fee
+        else:
+            delta_avg = delta_gross / delta_shares
+            allocated_cost = local_position.cost_basis * (delta_shares / local_position.shares)
+            realized = delta_gross - delta_fee - allocated_cost
+            remaining_fee_basis = local_position.entry_fee * (remaining / local_position.shares)
+        status = (
+            OrderStatus.FILLED.value
+            if total_shares >= Decimal(row.shares) - SIZE_TOLERANCE
+            else OrderStatus.PARTIAL.value
+        )
+        if status == OrderStatus.PARTIAL.value and current is None and row.order_type.upper() == "FOK":
+            blocks.append(f"SELL FOK order {row.client_order_id} has a partial fill without terminal order evidence")
+            return False
+        try:
+            changed = self.repo.reconcile_sell_fill(
+                client_order_id=row.client_order_id, position_id=local_position.id,
+                status=status, total_filled=total_shares,
+                total_avg_price=(total_gross / total_shares),
+                total_fee=total_fee, delta_filled=delta_shares,
+                delta_avg_price=delta_avg, delta_fee=delta_fee,
+                delta_realized_pnl=realized, remaining_shares=remaining,
+                remaining_cost_basis=max(Decimal(0), local_position.cost_basis - allocated_cost),
+                remaining_entry_fee=remaining_fee_basis, filled_at=now,
+                cancelled_at=now if status == OrderStatus.PARTIAL.value else None,
+            )
+        except Exception as exc:
+            blocks.append(f"SELL order {row.client_order_id} atomic accounting failed: {exc}")
+            return False
+        if changed:
+            notes.append(f"SELL order {row.client_order_id} reconciled from {len(fills)} confirmed venue fills ({total_shares} shares)")
+        return True
 
     def _adopt_position(self, row, shares: Decimal, price: Decimal, entry_fee: Decimal, notes: list[str]) -> None:
         if row.side.upper() != "BUY":

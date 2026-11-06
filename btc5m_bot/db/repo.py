@@ -281,6 +281,74 @@ class Repository:
             s.flush()
             return row
 
+    def reconcile_sell_fill(
+        self,
+        *,
+        client_order_id: str,
+        position_id: int,
+        status: str,
+        total_filled: Decimal,
+        total_avg_price: Decimal,
+        total_fee: Decimal,
+        delta_filled: Decimal,
+        delta_avg_price: Decimal,
+        delta_fee: Decimal,
+        delta_realized_pnl: Decimal,
+        remaining_shares: Decimal,
+        remaining_cost_basis: Decimal,
+        remaining_entry_fee: Decimal,
+        filled_at: datetime,
+        cancelled_at: datetime | None,
+    ) -> bool:
+        """Atomically persist a recovered SELL fill, position accounting and idempotency marker."""
+        marker_key = f"sell_recovery:{client_order_id}"
+        with session_scope(self._sf) as s:
+            order = s.get(OrderRow, client_order_id)
+            position = s.get(PositionRow, position_id)
+            if order is None or position is None:
+                raise KeyError("recovery order or position disappeared")
+            if s.get(AppStateRow, marker_key) is not None:
+                return False
+            order.status = status
+            order.filled_shares = total_filled
+            order.avg_price = total_avg_price
+            order.fee_usd = total_fee
+            order.filled_at = filled_at
+            order.cancelled_at = cancelled_at
+            position.shares = remaining_shares
+            position.cost_basis = remaining_cost_basis
+            position.entry_fee = remaining_entry_fee
+            position.exit_price = delta_avg_price if delta_filled > 0 else position.exit_price
+            position.exit_fee = position.exit_fee + delta_fee
+            position.realized_pnl = position.realized_pnl + delta_realized_pnl
+            if remaining_shares <= Decimal("0.001"):
+                position.shares = Decimal(0)
+                position.cost_basis = Decimal(0)
+                position.entry_fee = Decimal(0)
+                position.status = "CLOSED"
+                position.closed_at = filled_at
+            if delta_filled > 0:
+                s.add(TradeRow(
+                    market_id=order.market_id, client_order_id=client_order_id,
+                    side="SELL", outcome=order.outcome, price=delta_avg_price,
+                    shares=delta_filled, fee=delta_fee, realized_pnl=delta_realized_pnl,
+                    kind="EXIT_RECOVERY", mode=order.mode,
+                ))
+            reservation = s.scalar(
+                select(ExposureReservationRow).where(
+                    ExposureReservationRow.client_order_id == client_order_id,
+                    ExposureReservationRow.status == "ACTIVE",
+                )
+            )
+            if reservation is not None:
+                reservation.status = "CONSUMED"
+                reservation.released_at = _utcnow()
+            s.add(AppStateRow(
+                key=marker_key,
+                value={"status": status, "filled_shares": str(total_filled), "at": filled_at.isoformat()},
+            ))
+            return True
+
     def update_position(self, position_id: int, **fields: Any) -> None:
         with session_scope(self._sf) as s:
             row = s.get(PositionRow, position_id)

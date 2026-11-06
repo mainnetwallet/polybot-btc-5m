@@ -19,6 +19,7 @@ from .base import (
     ExchangeAdapter,
     ExchangeOpenOrder,
     ExchangePosition,
+    ExchangeTradeFill,
     GeoResult,
     HeartbeatResult,
     NotConfiguredError,
@@ -37,6 +38,7 @@ class FakeExchangeAdapter(ExchangeAdapter):
         self.positions: list[ExchangePosition] = []
         self.open_orders: dict[str, ExchangeOpenOrder] = {}
         self.resolutions: dict[str, str] = {}
+        self.order_fills: dict[str, list[ExchangeTradeFill]] = {}
         self.geo = GeoResult(blocked=False, country="BD", ip="127.0.0.1", detail="fake")
         self.now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         self.heartbeat_ids: list[str] = []
@@ -159,6 +161,14 @@ class FakeExchangeAdapter(ExchangeAdapter):
 
     async def get_order(self, order_id: str) -> ExchangeOpenOrder | None:
         return self.open_orders.get(order_id)
+
+    async def get_order_fills(
+        self, *, order_id: str, asset_id: str, start: datetime, end: datetime
+    ) -> list[ExchangeTradeFill]:
+        return [
+            fill for fill in self.order_fills.get(order_id, [])
+            if fill.asset_id == asset_id and start <= fill.matched_at <= end
+        ]
 
     async def get_resolution(self, condition_id: str, outcomes: tuple[str, ...] | None = None) -> str | None:
         return self.resolutions.get(condition_id)
