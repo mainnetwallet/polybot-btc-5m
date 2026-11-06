@@ -86,7 +86,8 @@ class ExecutionEngine:
     ) -> ExecutionOutcome:
         mode = self.mode_provider()
         schedule = FeeSchedule.from_market(market)
-        reserve_amount = intent.shares * intent.limit_price + taker_fee(intent.shares, intent.limit_price, schedule)
+        buy_notional = intent.usdc_amount if intent.usdc_amount is not None else intent.shares * intent.limit_price
+        reserve_amount = buy_notional + taker_fee(intent.shares, intent.limit_price, schedule)
         try:
             self.journal.persist_intent(intent, reserve_amount=reserve_amount)
         except Exception as exc:

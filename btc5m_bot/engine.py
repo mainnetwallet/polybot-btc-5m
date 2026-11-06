@@ -179,6 +179,8 @@ class BotEngine:
         self._simulations: dict[str, Any] = {}
         self._settlement_deferred: set[str] = set()
         self._last_hold_log: dict[str, float] = {}
+        # Trading switch OFF is a standing state, not an event: persist it once, not every minute / every market.
+        self._trading_off_logged = False
         self._tick_cursor: dict[str, datetime] = {}
         self._twap_cursor: datetime | None = None
         self._feature_record_at = 0.0
@@ -723,8 +725,16 @@ class BotEngine:
         market = machine.market
         cfg = self._config()
         if not cfg.trading_enabled:
-            self._note(now, "NO_TRADE", ReasonCode.TRADING_OFF, "trading switch is OFF; turn it ON in Settings to allow new entries")
+            self._note(
+                now,
+                "NO_TRADE",
+                ReasonCode.TRADING_OFF,
+                "trading switch is OFF; turn it ON in Settings to allow new entries",
+                persist=not self._trading_off_logged,
+            )
+            self._trading_off_logged = True
             return
+        self._trading_off_logged = False
         if not machine.entry_allowed(now):
             if now < machine.start:
                 self._note(now, "NO_TRADE", ReasonCode.MARKET_NOT_ACTIVE, f"market starts in {machine.seconds_to_start(now):.0f}s")
@@ -1318,6 +1328,7 @@ class BotEngine:
         edge: Decimal | None = None,
         price: Decimal | None = None,
         extra: dict | None = None,
+        persist: bool = True,
     ) -> None:
         market = self._active_market(now) or self._upcoming_market(now)
         market_id = market.market.market_id if market else "none"
@@ -1328,6 +1339,8 @@ class BotEngine:
             "detail": detail,
             **({"extra": extra} if extra else {}),
         }
+        if not persist:
+            return
         mono = self.clock.monotonic()
         previous = self._last_decision_log.get(market_id)
         if decision == "NO_TRADE" and previous is not None:

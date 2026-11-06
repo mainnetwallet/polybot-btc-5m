@@ -100,6 +100,30 @@ class PaperBroker:
             remaining -= take
         return filled, notional
 
+    def _walk_usdc(self, book: OrderBookSnapshot, usdc: Decimal, limit: Decimal) -> tuple[Decimal, Decimal]:
+        """Spend ``usdc`` on the asks (cheapest first, up to ``limit``): returns (shares, notional).
+
+        BUYs are denominated in USDC, never in shares: shares are whatever the amount buys.
+        """
+        remaining = usdc
+        shares = Decimal(0)
+        notional = Decimal(0)
+        for level in book.asks:
+            if remaining <= 0:
+                break
+            if level.price > limit or level.size <= 0:
+                continue
+            level_cost = level.size * level.price
+            if remaining >= level_cost:
+                take, cost = level.size, level_cost
+            else:
+                take, cost = remaining / level.price, remaining
+            shares += take
+            notional += cost
+            remaining -= cost
+        shares = floor_to_step(shares, Decimal("0.0001"))
+        return shares, notional
+
     async def place_order(self, intent: OrderIntent, market: MarketInfo, book: OrderBookSnapshot | None) -> OrderResult:
         await self.clock.sleep(self.taker_delay_ms / 1000.0)
         if book is None:
@@ -112,12 +136,22 @@ class PaperBroker:
             return OrderResult(intent.client_order_id, OrderStatus.CANCELLED, raw_status="missed_due_to_delay")
 
         if intent.side is Side.BUY:
-            filled, notional = self._walk_limit(book, intent.shares, intent.limit_price)
+            by_usdc = intent.usdc_amount is not None
+            if by_usdc:
+                # USDC-denominated BUY: spend exactly the amount, shares come out of the price.
+                filled, notional = self._walk_usdc(book, intent.usdc_amount, intent.limit_price)
+                short = notional < intent.usdc_amount - Decimal("0.01")
+            else:
+                filled, notional = self._walk_limit(book, intent.shares, intent.limit_price)
+                short = filled < intent.shares
             if filled <= 0:
                 return OrderResult(intent.client_order_id, OrderStatus.CANCELLED, raw_status="no_depth_at_limit")
-            if intent.order_type.upper() == "FOK" and filled < intent.shares:
+            if intent.order_type.upper() == "FOK" and short:
                 return OrderResult(intent.client_order_id, OrderStatus.CANCELLED, raw_status="fok_not_filled")
-            if self.rng.random() < self.partial_probability:
+            # FOK is all-or-nothing on the real exchange: it can never come back partially filled.
+            # (rng is still drawn first so seeded runs keep the same random sequence.)
+            partial_roll = self.rng.random() < self.partial_probability
+            if partial_roll and intent.order_type.upper() != "FOK" and not by_usdc:
                 fraction = Decimal(str(self.rng.uniform(0.2, 0.9)))
                 target = floor_to_step(filled * fraction, SHARE_STEP)
                 if target > 0:
@@ -146,7 +180,7 @@ class PaperBroker:
                 opened_at=self.clock.now(),
                 dust=dust,
             )
-            status = OrderStatus.FILLED if filled >= intent.shares else OrderStatus.PARTIAL
+            status = OrderStatus.PARTIAL if short or (not by_usdc and filled < intent.shares) else OrderStatus.FILLED
             result = OrderResult(
                 client_order_id=intent.client_order_id,
                 status=status,

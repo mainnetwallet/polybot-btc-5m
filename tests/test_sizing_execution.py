@@ -144,6 +144,24 @@ def test_paper_broker_entry_fill_fees_and_duplicate_guard(clock, repo):
     assert rejected.error_code == "DUPLICATE_ENTRY"
 
 
+def test_paper_buy_is_denominated_in_usdc_and_never_partial(clock, repo):
+    # partial_probability=1.0 would shrink a share-based FOK buy; a USDC buy must ignore it.
+    broker = PaperBroker(
+        Decimal("1000"), clock, miss_probability=0.0, partial_probability=1.0,
+        maker_fill_probability=0.0, seed=3,
+    )
+    market = make_market()
+    book = make_book(market.asset_id(Outcome.UP), ask="0.62", ask_size="1000")
+    intent = OrderJournal(repo).new_intent(
+        market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("2"),
+        limit_price=Decimal("0.63"), order_type="FOK", mode="PAPER", usdc_amount=Decimal("1"),
+    )
+    result = asyncio.run(broker.place_order(intent, market, book))
+    assert result.status is OrderStatus.FILLED
+    assert result.filled_shares == Decimal("1.6129")  # 1 USDC / 0.62, not the 2 planned shares
+    assert abs(result.filled_shares * result.avg_price - Decimal("1")) < Decimal("0.001")
+
+
 def test_paper_broker_sell_and_settlement(clock):
     broker = PaperBroker(Decimal("1000"), clock, miss_probability=0.0, partial_probability=0.0, seed=2)
     market = make_market()
