@@ -737,6 +737,7 @@ async function loadTab(name) {
       const c = r.config;
       renderTradingSwitch(!!c.trading_enabled);
       $("cfg-capital").value = text(c.capital_usd, "");
+      $("cfg-capfrombal").checked = !!c.capital_from_balance;
       $("cfg-tradesize").value = text(c.trade_size_usd, "");
       $("cfg-risk").value = (Number(c.risk_per_trade_pct) * 100).toFixed(2);
       $("cfg-daily").value = (Number(c.daily_loss_limit_pct) * 100).toFixed(2);
@@ -802,6 +803,7 @@ $("settings-form").addEventListener("submit", async (event) => {
     strategy: $("cfg-strategy").value,
     require_rules_approval: $("cfg-rules").checked,
   };
+  patch.capital_from_balance = $("cfg-capfrombal").checked;
   const capital = $("cfg-capital").value.trim();
   patch.capital_usd = capital === "" ? null : capital;
   const tradeSize = $("cfg-tradesize").value.trim();

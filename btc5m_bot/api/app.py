@@ -31,6 +31,7 @@ _HOST_RE = re.compile(r"[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?")
 CONFIG_WRITABLE = {
     "trading_enabled",
     "capital_usd",
+    "capital_from_balance",
     "risk_per_trade_pct",
     "trade_size_usd",
     "daily_loss_limit_pct",

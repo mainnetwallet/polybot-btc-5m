@@ -45,6 +45,9 @@ class RuntimeConfig(BaseModel):
     mode: Mode = Mode.PAPER
     capital_usd: Decimal | None = None
     risk_per_trade_pct: Decimal = Decimal("0.02")
+    # LIVE only: keep capital_usd equal to the real wallet balance (refreshed while flat, before the
+    # day's first trade). PAPER keeps the capital you set as the virtual starting bankroll.
+    capital_from_balance: bool = True
     daily_loss_limit_pct: Decimal = Decimal("0.04")
     daily_profit_lock_pct: Decimal | None = None
     max_consecutive_losses: int = 2

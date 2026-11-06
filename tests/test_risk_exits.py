@@ -469,3 +469,21 @@ def test_fixed_trade_size_has_no_minimum_capital(clock, repo):
         planned_cost=Decimal("5.2"), balance=Decimal("3"), recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.INSUFFICIENT_BALANCE
+
+
+def test_capital_follows_wallet_balance_only_when_safe():
+    from btc5m_bot.risk.capital import balance_capital_target as target
+
+    D = Decimal
+    # flat, no trades yet today: adopt the balance (rounded down to cents)
+    assert target(balance=D("87.4567"), current_capital=D("1000"), flat=True, day_trades=0) == D("87.45")
+    # unset capital is filled even after trades
+    assert target(balance=D("50"), current_capital=None, flat=True, day_trades=3) == D("50.00")
+    # open position / reserved order: balance understates the bankroll, leave capital alone
+    assert target(balance=D("40"), current_capital=D("100"), flat=False, day_trades=0) is None
+    # after the first trade of the day the daily loss limit stays anchored
+    assert target(balance=D("90"), current_capital=D("100"), flat=True, day_trades=1) is None
+    # nothing to change / bad balance
+    assert target(balance=D("100"), current_capital=D("100"), flat=True, day_trades=0) is None
+    assert target(balance=None, current_capital=D("100"), flat=True, day_trades=0) is None
+    assert target(balance=D("0"), current_capital=D("100"), flat=True, day_trades=0) is None

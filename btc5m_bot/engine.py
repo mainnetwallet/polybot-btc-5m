@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ from .oracle.simulator import compare_to_actual, resolve_market
 from .oracle.twap import PolyBoltTwapFeed, TwapObservation, TwapTracker
 from .recovery import RecoveryManager, RecoveryResult
 from .risk import ExposureLedger, RiskManager, RiskStatus
+from .risk.capital import balance_capital_target
 from .sizing import size_position
 from .state import EngineStateStore
 from .types import (
@@ -508,9 +509,24 @@ class BotEngine:
             balance = await self.adapter.get_balance()
             self._balance = balance.available
             self._balance_at = now
+            self._sync_capital_to_balance(now)
         except Exception as exc:  # noqa: BLE001
             log.warning("balance refresh failed: %s", exc)
             self._balance = None
+
+    def _sync_capital_to_balance(self, now: datetime) -> None:
+        """LIVE: let capital_usd follow the real wallet balance (see balance_capital_target)."""
+        cfg = self._config()
+        if self._effective_mode is not Mode.LIVE or not cfg.capital_from_balance:
+            return
+        flat = self.repo.active_reserved_total() <= 0 and not self.ledger.has_active_position(Mode.LIVE.value)
+        day = self.repo.get_risk_day(now.astimezone(timezone.utc).date())
+        target = balance_capital_target(
+            balance=self._balance, current_capital=cfg.capital_usd, flat=flat, day_trades=day.trades
+        )
+        if target is not None:
+            self.config_store.set_capital(target)
+            log.info("capital set to wallet balance: %s", target)
 
     # ------------------------------------------------------------------ health
     def _refresh_health(self, now: datetime) -> None:

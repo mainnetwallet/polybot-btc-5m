@@ -285,6 +285,12 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    Position size is derived from `capital × 2% / worst-case unit cost`; it is never
    increased to satisfy the minimum order size.
 
+   **Capital vs balance:** `capital_usd` is the bankroll number the daily loss limit is based on;
+   the balance is the actual cash (PAPER: virtual cash, LIVE: wallet USDC). In **LIVE**,
+   `capital_from_balance` (default `true`) keeps `capital_usd` equal to the wallet balance,
+   refreshed only while the bot is flat and before the day's first trade. In PAPER, capital is
+   the starting virtual bankroll you set.
+
    **Fixed dollar size (default $1):** every entry buys about `trade_size_usd` dollars. It
    defaults to `1`; change it in `config\runtime.json` or the *Trade size* field under Settings
    (`2` → $2, `5` → $5). There is **no minimum capital**: the amount is whatever you set. It is
