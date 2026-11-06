@@ -117,6 +117,9 @@ def _build(settings, repo, adapter, config_store, clock):
         start_api=False,
     )
     engine._recovery_result = RecoveryResult(ready=True, state=RecoveryState.READY)
+    # The pipeline tests exercise everything behind the master switch, so turn it on here.
+    # The switch itself is covered by the tests at the bottom of this file.
+    config_store.update({"trading_enabled": True})
     return engine, market, spec
 
 
@@ -275,3 +278,45 @@ def test_settlement_deferred_while_order_unresolved(settings, repo, adapter, con
     assert machine.state is not MarketState.SETTLED
     events = {e.event_type for e in repo.recent_protection_events(limit=25)}
     assert "SETTLEMENT_DEFERRED" in events
+
+
+def test_trading_switch_defaults_off_and_blocks_new_entries(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, market, spec = _build(settings, repo, adapter, config_store, clock)
+    config_store.update({"capital_usd": "100", "trading_enabled": False})
+    asyncio.run(engine._iteration())  # discovery registers the rule
+    repo.approve_resolution_rule(spec.fingerprint, "test-operator")
+
+    asyncio.run(engine._iteration())
+
+    assert engine._last_decision["decision"] == "NO_TRADE"
+    assert engine._last_decision["reason"] == ReasonCode.TRADING_OFF.value
+    assert adapter.placed == []
+    assert engine.ledger.has_active_position(engine._effective_mode.value) is False
+
+
+def test_trading_switch_on_lets_the_normal_checks_run(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)  # switch ON, rule unapproved
+
+    asyncio.run(engine._iteration())
+
+    assert engine._last_decision["reason"] == ReasonCode.RULES_UNAPPROVED.value  # not TRADING_OFF
+
+
+def test_trading_switch_fresh_config_is_off(config_store):
+    from btc5m_bot.config import RuntimeConfig
+
+    assert RuntimeConfig().trading_enabled is False
+
+
+def test_unfunded_paper_broker_is_funded_when_capital_is_set_later(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)
+    engine.paper.cash = Decimal(0)  # booted while capital_usd was still unset
+    config_store.update({"capital_usd": "200"})
+
+    asyncio.run(engine._refresh_balance(clock.now()))
+
+    assert engine.paper.cash == Decimal("200")
+    assert engine._balance == Decimal("200")

@@ -461,8 +461,24 @@ class BotEngine:
             outcomes.append(Outcome.DOWN)
         await asyncio.gather(*(fetch(o) for o in outcomes))
 
+    def _sync_paper_capital(self) -> None:
+        """Fund an unfunded paper broker once capital_usd is configured after startup.
+
+        The broker is created once at boot with the capital known then. If capital was unset, its
+        cash stayed 0 and every entry failed with INSUFFICIENT_BALANCE even after the operator set
+        capital in the dashboard. Only a pristine broker (no cash, no fills, no positions) is funded,
+        so existing paper results are never rewritten.
+        """
+        target = self._config().capital_usd
+        if target is None or target <= 0:
+            return
+        if self.paper.cash <= 0 and not self.paper.positions and not self.paper.fills:
+            self.paper.cash = target
+
     async def _refresh_balance(self, now: datetime) -> None:
         if self._effective_mode is Mode.PAPER:
+            if self.paper is not None:
+                self._sync_paper_capital()
             self._balance = self.paper.balance if self.paper is not None else None
             return
         mono = self.clock.monotonic()
@@ -667,6 +683,10 @@ class BotEngine:
         if machine is None:
             return
         market = machine.market
+        cfg = self._config()
+        if not cfg.trading_enabled:
+            self._note(now, "NO_TRADE", ReasonCode.TRADING_OFF, "trading switch is OFF; turn it ON in Settings to allow new entries")
+            return
         if not machine.entry_allowed(now):
             if now < machine.start:
                 self._note(now, "NO_TRADE", ReasonCode.MARKET_NOT_ACTIVE, f"market starts in {machine.seconds_to_start(now):.0f}s")
@@ -675,7 +695,6 @@ class BotEngine:
             else:
                 self._note(now, "NO_TRADE", ReasonCode.ENTRY_WINDOW_CLOSED, "120-second entry window closed")
             return
-        cfg = self._config()
         if self.ledger.has_active_position(self._effective_mode.value):
             return
         if self.ledger.entries_used(market.market_id, self._effective_mode.value) >= cfg.max_entries_per_market:

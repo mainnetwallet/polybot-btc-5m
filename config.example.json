@@ -44,5 +44,6 @@
   "max_latency_p95_ms": 1200,
   "taker_delay_ms": 250,
   "fee_buffer": 0.002,
-  "min_order_notional_usd": 1.00
+  "min_order_notional_usd": 1.00,
+  "trading_enabled": false
 }

@@ -712,6 +712,7 @@ async function loadTab(name) {
     } else if (name === "settings") {
       const r = await api("/api/config");
       const c = r.config;
+      renderTradingSwitch(!!c.trading_enabled);
       $("cfg-capital").value = text(c.capital_usd, "");
       $("cfg-risk").value = (Number(c.risk_per_trade_pct) * 100).toFixed(2);
       $("cfg-daily").value = (Number(c.daily_loss_limit_pct) * 100).toFixed(2);
@@ -734,6 +735,28 @@ async function loadTab(name) {
     report("tab load failed: " + err.message);
   }
 }
+
+function renderTradingSwitch(on) {
+  const badge = $("trading-state");
+  const btn = $("trading-toggle");
+  badge.textContent = on ? "ON" : "OFF";
+  badge.className = "badge " + (on ? "ok" : "bad");
+  btn.textContent = on ? "Turn OFF" : "Turn ON";
+  btn.className = "btn " + (on ? "danger" : "primary");
+  btn.dataset.on = on ? "1" : "0";
+}
+
+$("trading-toggle").addEventListener("click", async () => {
+  const turnOn = $("trading-toggle").dataset.on !== "1";
+  if (turnOn && !window.confirm("Turn trading ON? The bot will be allowed to open new positions.")) return;
+  try {
+    const r = await post("/api/config", { patch: { trading_enabled: turnOn } });
+    renderTradingSwitch(!!r.config.trading_enabled);
+    report("trading " + (turnOn ? "ON" : "OFF"));
+  } catch (err) {
+    report("trading switch failed: " + err.message);
+  }
+});
 
 $("settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -121,6 +121,14 @@ loss), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` a
 Open <http://127.0.0.1:8765> and log in. Leave the window open; press `Ctrl+C` or run
 `.\stop.bat` from another terminal to shut down gracefully.
 
+### 6b. Trading switch (ON / OFF)
+
+New entries are controlled by one master switch, **OFF by default**. Open **Settings** in the
+dashboard and press **Turn ON** to allow trading, **Turn OFF** to stop it. While OFF the bot records
+`TRADING_OFF` and opens nothing; an already open position is still managed and closed. The setting is
+`trading_enabled` in `config\runtime.json` and applies immediately, no restart. On the Render free plan
+the file is wiped on restart, so the switch returns to OFF until you turn it on again.
+
 ### 7. Approve the resolution rule
 
 Open the **Rules** tab, compare each fingerprint's rule text with the live market metadata,

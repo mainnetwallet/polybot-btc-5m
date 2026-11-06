@@ -102,6 +102,11 @@ class RuntimeConfig(BaseModel):
     # resting limit orders. None restores the legacy share-count minimum from market metadata.
     min_order_notional_usd: Decimal | None = Decimal("1.00")
 
+    # Master trading switch. OFF blocks every NEW entry (TRADING_OFF). Open positions keep being
+    # managed and exited. Defaults to OFF so a fresh or restarted deploy never trades until the
+    # operator turns it on. This is in addition to, not instead of, the risk limits and LIVE gate.
+    trading_enabled: bool = False
+
     @field_validator("min_order_notional_usd")
     @classmethod
     def _min_notional(cls, v: Decimal | None) -> Decimal | None:
