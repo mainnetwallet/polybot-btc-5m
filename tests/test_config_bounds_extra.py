@@ -14,7 +14,6 @@ from btc5m_bot.config import RuntimeConfig
         ("stop_loss_roi", "-1"),
         # Unreachable targets (price is capped at 1) silently turn take-profit off.
         ("take_profit_roi", "11"),
-        ("dynamic_tp_max_multiple", "11"),
     ],
 )
 def test_values_that_disable_an_exit_are_rejected(field, value):
@@ -28,7 +27,6 @@ def test_values_that_disable_an_exit_are_rejected(field, value):
         ("stop_loss_roi", "-0.99"),
         ("stop_loss_roi", "-0.01"),
         ("take_profit_roi", "10"),
-        ("dynamic_tp_max_multiple", "10"),
     ],
 )
 def test_boundary_values_still_accepted(field, value):

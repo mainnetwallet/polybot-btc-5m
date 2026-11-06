@@ -89,12 +89,26 @@ def test_every_writable_key_is_a_real_field():
     assert CONFIG_WRITABLE <= set(RuntimeConfig.model_fields)
 
 
-def test_every_writable_key_is_editable_on_the_settings_page():
-    # A key the API accepts but the Settings page never sends is a setting nobody can change from
-    # the dashboard. Keep the two lists from drifting apart.
+# The Settings page is deliberately short: essentials plus a small Advanced box. These keys are still
+# accepted by the API and keep their stored/default value, but have no control on the page. A NEW
+# writable key must either get a control or be added here on purpose, so nothing is forgotten silently.
+NOT_ON_SETTINGS_PAGE = {
+    "daily_profit_lock_pct", "max_slippage", "min_depth_multiple", "dynamic_take_profit",
+    "dynamic_tp_min_multiple", "trailing_stop_pct", "momentum_reversal_z",
+    "min_hold_seconds_before_reversal", "liquidity_exit_depth_drop_pct", "liquidity_exit_spread_multiple",
+    "time_exit_seconds_before_end", "min_oracle_coverage_seconds", "strategy_mode", "feature_modes",
+    "max_data_age_ms", "max_book_age_ms", "max_ack_latency_ms", "max_latency_p95_ms", "taker_delay_ms",
+    "fee_buffer", "auto_approve_rules", "min_order_notional_usd",
+}
+
+
+def test_every_writable_key_is_on_the_settings_page_or_deliberately_left_off():
     js = (ROOT / "btc5m_bot" / "web" / "app.js").read_text(encoding="utf-8")
-    missing = sorted(key for key in CONFIG_WRITABLE if key not in js)
-    assert not missing, f"writable but not on the Settings page: {missing}"
+    on_page = {key for key in CONFIG_WRITABLE if key in js}
+    # "trading_enabled" is sent by the Trading switch, the rest by the form.
+    unexplained = sorted(CONFIG_WRITABLE - on_page - NOT_ON_SETTINGS_PAGE)
+    assert not unexplained, f"writable but neither on the Settings page nor listed as left off: {unexplained}"
+    assert NOT_ON_SETTINGS_PAGE <= CONFIG_WRITABLE, "stale entries in NOT_ON_SETTINGS_PAGE"
 
 
 def test_settings_form_does_not_block_save_with_native_validation():
@@ -103,4 +117,3 @@ def test_settings_form_does_not_block_save_with_native_validation():
     html = (ROOT / "btc5m_bot" / "web" / "index.html").read_text(encoding="utf-8")
     form_tag = html[html.index('<form id="settings-form"'):].split(">", 1)[0]
     assert "novalidate" in form_tag
-    assert 'id="cfg-features"' in html

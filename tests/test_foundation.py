@@ -44,8 +44,6 @@ def test_risk_limits_are_immutable():
     with pytest.raises(HardLimitError):
         RuntimeConfig(max_consecutive_losses=3)
     with pytest.raises(HardLimitError):
-        RuntimeConfig(entry_window_seconds=121)
-    with pytest.raises(HardLimitError):
         RuntimeConfig(max_ack_latency_ms=3001)
 
 

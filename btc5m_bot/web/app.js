@@ -1010,6 +1010,7 @@ async function loadTab(name) {
     } else if (name === "settings") {
       const r = await api("/api/config");
       fillSettingsForm(r.config);
+      showAdvice(r.advice);
       setSettingsMsg("", "muted");
       showSettingsStorage(r.storage);
     }
@@ -1024,30 +1025,34 @@ function fractionToPct(v) { return String(+(Number(v) * 100).toFixed(4)); }
 function pctToFraction(v) { return (Number(v) / 100).toFixed(6); }
 
 /* Fill every Settings control from a config object. Used on page load and again after a save, so
-   the form always shows what the server actually stored. */
+   the form always shows what the server really stored. Settings that are not on this page (exit
+   fine-tuning, latency limits, feed ages ...) keep their stored/default values; saving never touches them. */
 function fillSettingsForm(c) {
   renderTradingSwitch(!!c.trading_enabled);
   $("cfg-capital").value = text(c.capital_usd, "");
-  $("cfg-capfrombal").checked = !!c.capital_from_balance;
   $("cfg-tradesize").value = text(c.trade_size_usd, "");
-  $("cfg-risk").value = fractionToPct(c.risk_per_trade_pct);
   $("cfg-daily").value = text(c.daily_loss_limit_usd, "");
+  $("cfg-strategy").value = c.strategy;
   $("cfg-prob").value = c.min_probability;
+  $("cfg-tp").value = c.take_profit_roi;
+  $("cfg-sl").value = c.stop_loss_roi;
+  $("cfg-risk").value = fractionToPct(c.risk_per_trade_pct);
   $("cfg-edge").value = c.min_net_edge;
   $("cfg-spread").value = c.max_spread;
-  $("cfg-tp").value = c.take_profit_roi;
-  $("cfg-dyntp").checked = !!c.dynamic_take_profit;
-  $("cfg-dyntpmin").value = c.dynamic_tp_min_multiple;
-  $("cfg-dyntpmax").value = c.dynamic_tp_max_multiple;
-  $("cfg-sl").value = c.stop_loss_roi;
-  $("cfg-momz").value = c.momentum_reversal_z;
-  $("cfg-minhold").value = c.min_hold_seconds_before_reversal;
-  $("cfg-liqdrop").value = fractionToPct(c.liquidity_exit_depth_drop_pct);
-  $("cfg-liqspread").value = c.liquidity_exit_spread_multiple;
-  $("cfg-strategy").value = c.strategy;
+  $("cfg-maxloss").value = c.max_consecutive_losses;
+  $("cfg-cooldown").value = c.cooldown_minutes;
   $("cfg-rules").checked = !!c.require_rules_approval;
-  loadAdvancedFields(c);
-  loadFeatureFields(c);
+  $("cfg-capfrombal").checked = !!c.capital_from_balance;
+}
+
+/* Warn in plain words when Capital / Trade size can never produce an order (exchange minimum vs the
+   2% risk cap). Without this the bot just shows endless NO_TRADE rows. */
+function showAdvice(advice) {
+  const node = $("cfg-advice");
+  if (!node) return;
+  const message = advice && !advice.ok ? advice.message : "";
+  node.textContent = message || "";
+  node.classList.toggle("hidden", !message);
 }
 
 function renderTradingSwitch(on) {
@@ -1072,129 +1077,6 @@ $("trading-toggle").addEventListener("click", async () => {
   }
 });
 
-/* Advanced settings: everything else that used to need .env / runtime.json edits. Built from this
-   table so the form, the loader and the saver cannot drift apart. kind: num | bool | select.
-   nullable: an empty box saves null (feature off). */
-const ADV_FIELDS = [
-  { key: "auto_approve_rules", label: "Auto-approve resolution rules (PAPER only)", kind: "bool" },
-  { key: "strategy_mode", label: "Strategy mode", kind: "select", options: ["ACTIVE", "SHADOW", "OFF"] },
-  { key: "daily_profit_lock_pct", label: "Daily profit lock (fraction of capital, empty = off)", kind: "num", step: "0.01", nullable: true },
-  { key: "max_consecutive_losses", label: "Max consecutive losses (1-2)", kind: "num", step: "1" },
-  { key: "cooldown_minutes", label: "Cooldown after losses (minutes)", kind: "num", step: "1" },
-  { key: "entry_window_seconds", label: "Entry window (seconds, max 120)", kind: "num", step: "1" },
-  { key: "max_slippage", label: "Max slippage", kind: "num", step: "0.001" },
-  { key: "min_depth_multiple", label: "Min book depth (x trade size)", kind: "num", step: "0.1" },
-  { key: "trailing_stop_pct", label: "Trailing stop (fraction)", kind: "num", step: "0.01" },
-  { key: "time_exit_seconds_before_end", label: "Time exit (seconds before market end)", kind: "num", step: "1" },
-  { key: "min_oracle_coverage_seconds", label: "Min oracle coverage (seconds)", kind: "num", step: "1" },
-  { key: "max_data_age_ms", label: "Max BTC data age (ms)", kind: "num", step: "1" },
-  { key: "max_book_age_ms", label: "Max order book age (ms)", kind: "num", step: "1" },
-  { key: "max_ack_latency_ms", label: "Max order ack latency (ms, max 3000)", kind: "num", step: "1" },
-  { key: "max_latency_p95_ms", label: "Max p95 latency (ms)", kind: "num", step: "1" },
-  { key: "taker_delay_ms", label: "Paper taker delay (ms)", kind: "num", step: "1" },
-  { key: "fee_buffer", label: "Fee buffer (USDC per share)", kind: "num", step: "0.001" },
-  { key: "min_order_notional_usd", label: "Exchange minimum order (USDC, empty = share minimum)", kind: "num", step: "0.01", nullable: true },
-];
-
-function buildAdvancedFields() {
-  const box = $("cfg-advanced");
-  if (!box || box.dataset.built) return;
-  box.dataset.built = "1";
-  for (const f of ADV_FIELDS) {
-    const isBool = f.kind === "bool";
-    const label = document.createElement("label");
-    label.className = isBool ? "toggle" : "field";
-    const input = f.kind === "select" ? document.createElement("select") : document.createElement("input");
-    input.id = "adv-" + f.key;
-    if (isBool) input.type = "checkbox";
-    else if (f.kind === "num") { input.type = "number"; input.step = f.step || "any"; }
-    else for (const o of f.options) { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); }
-    if (isBool) {
-      label.appendChild(input);
-      label.appendChild(el("span", null, f.label));
-    } else {
-      // "Name (hint)" renders as a title with the hint as quieter small text.
-      const m = /^(.*?)\s*\((.*)\)\s*$/.exec(f.label);
-      const caption = el("span", "lbl", m ? m[1] : f.label);
-      if (m) caption.appendChild(el("small", null, m[2]));
-      label.appendChild(caption);
-      label.appendChild(input);
-    }
-    box.appendChild(label);
-  }
-}
-
-function loadAdvancedFields(c) {
-  buildAdvancedFields();
-  for (const f of ADV_FIELDS) {
-    const input = $("adv-" + f.key);
-    if (!input) continue;
-    if (f.kind === "bool") input.checked = !!c[f.key];
-    else input.value = c[f.key] === null || c[f.key] === undefined ? "" : String(c[f.key]);
-  }
-}
-
-function collectAdvancedFields(patch, skipped) {
-  for (const f of ADV_FIELDS) {
-    const input = $("adv-" + f.key);
-    if (!input) continue;
-    if (f.kind === "bool") patch[f.key] = input.checked;
-    else if (f.kind === "select") patch[f.key] = input.value;
-    else {
-      const v = input.value.trim();
-      if (v === "") {
-        if (f.nullable) patch[f.key] = null;
-        else skipped.push(f.label.replace(/\s*\(.*\)\s*$/, ""));
-      } else patch[f.key] = v;
-    }
-  }
-}
-
-/* Experimental feature switches (config.feature_modes). Built from the stored dict, so a flag that
-   exists in the config is always editable here even if this list does not name it. The save sends
-   the whole dict because the server replaces it, it does not merge it. */
-const FEATURE_LABELS = {
-  trailing_stop: "Trailing stop",
-  partial_exits: "Partial exits",
-  correlation_shadow: "Correlation shadow",
-  ml_model: "ML model",
-  feed_failover: "Feed failover",
-};
-let featureBase = {};
-
-function loadFeatureFields(c) {
-  const box = $("cfg-features");
-  if (!box) return;
-  featureBase = Object.assign({}, c.feature_modes || {});
-  box.textContent = "";
-  const keys = Object.keys(FEATURE_LABELS).concat(Object.keys(featureBase).filter((k) => !(k in FEATURE_LABELS)));
-  for (const key of keys) {
-    const label = document.createElement("label");
-    label.className = "field";
-    const select = document.createElement("select");
-    select.id = "feat-" + key;
-    select.dataset.key = key;
-    for (const o of ["OFF", "SHADOW", "ACTIVE"]) {
-      const opt = document.createElement("option");
-      opt.value = o;
-      opt.textContent = o;
-      select.appendChild(opt);
-    }
-    select.value = featureBase[key] || "OFF";
-    label.appendChild(el("span", "lbl", FEATURE_LABELS[key] || key));
-    label.appendChild(select);
-    box.appendChild(label);
-  }
-}
-
-function collectFeatureFields(patch) {
-  const box = $("cfg-features");
-  if (!box || !box.children.length) return;
-  const modes = Object.assign({}, featureBase);
-  box.querySelectorAll("select").forEach((s) => { modes[s.dataset.key] = s.value; });
-  patch.feature_modes = modes;
-}
-
 $("settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const patch = {};
@@ -1203,19 +1085,15 @@ $("settings-form").addEventListener("submit", async (event) => {
 
   // [config key, input id, label, converter to the stored unit]
   const required = [
-    ["risk_per_trade_pct", "cfg-risk", "Risk per trade", pctToFraction],
     ["daily_loss_limit_usd", "cfg-daily", "Daily loss limit", (v) => v],
     ["min_probability", "cfg-prob", "Minimum probability", (v) => v],
+    ["take_profit_roi", "cfg-tp", "Take profit", (v) => v],
+    ["stop_loss_roi", "cfg-sl", "Stop loss", (v) => v],
+    ["risk_per_trade_pct", "cfg-risk", "Risk per trade", pctToFraction],
     ["min_net_edge", "cfg-edge", "Minimum net edge", (v) => v],
     ["max_spread", "cfg-spread", "Maximum spread", (v) => v],
-    ["take_profit_roi", "cfg-tp", "Take profit", (v) => v],
-    ["dynamic_tp_min_multiple", "cfg-dyntpmin", "Dynamic TP min multiple", (v) => v],
-    ["dynamic_tp_max_multiple", "cfg-dyntpmax", "Dynamic TP max multiple", (v) => v],
-    ["stop_loss_roi", "cfg-sl", "Stop loss", (v) => v],
-    ["momentum_reversal_z", "cfg-momz", "Momentum reversal", (v) => v],
-    ["min_hold_seconds_before_reversal", "cfg-minhold", "Minimum hold", (v) => v],
-    ["liquidity_exit_depth_drop_pct", "cfg-liqdrop", "Liquidity depth drop", pctToFraction],
-    ["liquidity_exit_spread_multiple", "cfg-liqspread", "Liquidity spread multiple", (v) => v],
+    ["max_consecutive_losses", "cfg-maxloss", "Max losses in a row", (v) => v],
+    ["cooldown_minutes", "cfg-cooldown", "Pause after losses", (v) => v],
   ];
   for (const [key, id, label, conv] of required) {
     const raw = $(id).value.trim();
@@ -1230,7 +1108,6 @@ $("settings-form").addEventListener("submit", async (event) => {
     return;
   }
 
-  patch.dynamic_take_profit = $("cfg-dyntp").checked;
   patch.strategy = $("cfg-strategy").value;
   patch.require_rules_approval = $("cfg-rules").checked;
   patch.capital_from_balance = $("cfg-capfrombal").checked;
@@ -1238,12 +1115,11 @@ $("settings-form").addEventListener("submit", async (event) => {
   patch.capital_usd = capital === "" ? null : capital;
   const tradeSize = $("cfg-tradesize").value.trim();
   patch.trade_size_usd = tradeSize === "" ? null : tradeSize;
-  collectAdvancedFields(patch, skipped);
-  collectFeatureFields(patch);
 
   try {
     const r = await post("/api/config", { patch });
     fillSettingsForm(r.config);   // show what the server really stored (normalised / clamped values)
+    showAdvice(r.advice);
     showSettingsStorage(r.storage);
     if (skipped.length) {
       setSettingsMsg("Saved. Left unchanged (empty): " + skipped.join(", "), "saved");

@@ -42,7 +42,6 @@ class RuntimeConfig(BaseModel):
     HARD_MAX_POSITIONS: ClassVar[int] = 1
     HARD_MAX_ENTRIES_PER_MARKET: ClassVar[int] = 1
     HARD_MAX_CONSECUTIVE_LOSSES: ClassVar[int] = 2
-    HARD_ENTRY_WINDOW_SECONDS: ClassVar[int] = 120
     HARD_MAX_ACK_LATENCY_MS: ClassVar[int] = 3000
 
     mode: Mode = Mode.PAPER
@@ -58,7 +57,6 @@ class RuntimeConfig(BaseModel):
     cooldown_minutes: int = 15
     max_active_positions: int = 1
     max_entries_per_market: int = 1
-    entry_window_seconds: int = 120
 
     min_probability: Decimal = Decimal("0.60")
     min_net_edge: Decimal = Decimal("0.05")
@@ -69,7 +67,6 @@ class RuntimeConfig(BaseModel):
     take_profit_roi: Decimal = Decimal("0.20")
     dynamic_take_profit: bool = True
     dynamic_tp_min_multiple: Decimal = Decimal("0.75")
-    dynamic_tp_max_multiple: Decimal = Decimal("1.50")
     stop_loss_roi: Decimal = Decimal("-0.25")
     trailing_stop_pct: Decimal = Decimal("0.15")
     momentum_reversal_z: Decimal = Decimal("1.5")
@@ -95,11 +92,7 @@ class RuntimeConfig(BaseModel):
 
     feature_modes: dict[str, FeatureMode] = Field(
         default_factory=lambda: {
-            "correlation_shadow": FeatureMode.SHADOW,
-            "partial_exits": FeatureMode.SHADOW,
             "trailing_stop": FeatureMode.SHADOW,
-            "ml_model": FeatureMode.OFF,
-            "feed_failover": FeatureMode.OFF,
         }
     )
 
@@ -148,12 +141,28 @@ class RuntimeConfig(BaseModel):
             raise HardLimitError("risk_per_trade_pct must be > 0 and <= 0.02 (immutable 2% cap)")
         return v
 
+    # Settings that existed in older versions but never changed any behaviour (or were replaced).
+    # Saved configs that still contain them must keep loading, so they are dropped, not rejected.
+    LEGACY_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {"daily_loss_limit_pct", "entry_window_seconds", "dynamic_tp_max_multiple"}
+    )
+    LEGACY_FEATURES: ClassVar[frozenset[str]] = frozenset(
+        {"correlation_shadow", "partial_exits", "ml_model", "feed_failover"}
+    )
+
     @model_validator(mode="before")
     @classmethod
-    def _drop_legacy_daily_pct(cls, data: Any) -> Any:
-        # Older runtime.json files stored the daily loss limit as a % of capital; it is now USDC.
-        if isinstance(data, dict) and "daily_loss_limit_pct" in data:
-            data = {k: v for k, v in data.items() if k != "daily_loss_limit_pct"}
+    def _drop_legacy_settings(cls, data: Any) -> Any:
+        # daily_loss_limit_pct: older files stored the daily loss limit as a % of capital (now USDC).
+        # entry_window_seconds: the 120 s entry cutoff is fixed in markets/lifecycle.py.
+        # dynamic_tp_max_multiple: the take-profit target is never raised above take_profit_roi.
+        if not isinstance(data, dict):
+            return data
+        if cls.LEGACY_KEYS & data.keys():
+            data = {k: v for k, v in data.items() if k not in cls.LEGACY_KEYS}
+        modes = data.get("feature_modes")
+        if isinstance(modes, dict) and cls.LEGACY_FEATURES & modes.keys():
+            data = {**data, "feature_modes": {k: v for k, v in modes.items() if k not in cls.LEGACY_FEATURES}}
         return data
 
     @field_validator("daily_loss_limit_usd")
@@ -189,13 +198,6 @@ class RuntimeConfig(BaseModel):
     def _entries(cls, v: int) -> int:
         if v != 1:
             raise HardLimitError("max_entries_per_market is fixed at 1")
-        return v
-
-    @field_validator("entry_window_seconds")
-    @classmethod
-    def _window(cls, v: int) -> int:
-        if v <= 0 or v > cls.HARD_ENTRY_WINDOW_SECONDS:
-            raise HardLimitError("entry_window_seconds must be <= 120 (immutable cap)")
         return v
 
     @field_validator("max_ack_latency_ms")
@@ -260,13 +262,6 @@ class RuntimeConfig(BaseModel):
     def _tp_min(cls, v: Decimal) -> Decimal:
         if not (Decimal(0) < v <= Decimal(1)):
             raise ValueError("dynamic_tp_min_multiple must be in (0, 1]")
-        return v
-
-    @field_validator("dynamic_tp_max_multiple")
-    @classmethod
-    def _tp_max(cls, v: Decimal) -> Decimal:
-        if v < 1 or v > 10:
-            raise ValueError("dynamic_tp_max_multiple must be between 1 and 10")
         return v
 
     # ---- range checks for the remaining numeric tunables (every one is dashboard-writable) ----
@@ -348,12 +343,6 @@ class RuntimeConfig(BaseModel):
     def _live_mode_needs_activation(self) -> "RuntimeConfig":
         # LIVE is representable but the engine will refuse it without a persisted,
         # user-confirmed activation and a fully passing LIVE gate.
-        return self
-
-    @model_validator(mode="after")
-    def _dynamic_tp_bounds(self) -> "RuntimeConfig":
-        if self.dynamic_tp_min_multiple > self.dynamic_tp_max_multiple:
-            raise ValueError("dynamic_tp_min_multiple must not exceed dynamic_tp_max_multiple")
         return self
 
     def feature(self, name: str) -> FeatureMode:

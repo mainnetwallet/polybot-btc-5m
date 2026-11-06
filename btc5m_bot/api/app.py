@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field
 from ..analytics.calibration import calibration_report
 from ..analytics.performance import compute_performance, daily_performance, loss_breakdown
 from ..analytics.validation import _calibration_predictions, build_validation_report
-from ..config import ConfigStore, HardLimitError, Settings
+from ..config import ConfigStore, HardLimitError, RuntimeConfig, Settings
+from ..sizing import capital_advice
 from ..security import redact
 from .auth import CSRF_HEADER, SESSION_COOKIE, AuthError, AuthManager, Session
 
@@ -38,7 +39,6 @@ CONFIG_WRITABLE = {
     "daily_profit_lock_pct",
     "max_consecutive_losses",
     "cooldown_minutes",
-    "entry_window_seconds",
     "min_probability",
     "min_net_edge",
     "max_spread",
@@ -47,7 +47,6 @@ CONFIG_WRITABLE = {
     "take_profit_roi",
     "dynamic_take_profit",
     "dynamic_tp_min_multiple",
-    "dynamic_tp_max_multiple",
     "stop_loss_roi",
     "trailing_stop_pct",
     "momentum_reversal_z",
@@ -91,6 +90,16 @@ def _jsonable(value: Any) -> Any:
 
 def _row(row: Any) -> dict[str, Any]:
     return {col.key: _jsonable(getattr(row, col.key)) for col in row.__table__.columns}
+
+
+def _advice(cfg: RuntimeConfig) -> dict[str, Any]:
+    """Tell the operator, in words, when Capital / Trade size cannot ever produce an order."""
+    return capital_advice(
+        capital=cfg.capital_usd,
+        risk_pct=cfg.risk_per_trade_pct,
+        trade_size_usd=cfg.trade_size_usd,
+        fee_buffer=cfg.fee_buffer,
+    )
 
 
 class LoginBody(BaseModel):
@@ -318,6 +327,7 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
         return {
             "ok": True,
             "config": cfg.model_dump(mode="json"),
+            "advice": _advice(cfg),
             "revision": config_store.revision,
             "storage": config_store.storage,
         }
@@ -347,6 +357,7 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
         return {
             "ok": True,
             "config": new.model_dump(mode="json"),
+            "advice": _advice(new),
             "revision": config_store.revision,
             "storage": config_store.storage,
         }

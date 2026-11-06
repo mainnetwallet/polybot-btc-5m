@@ -13,7 +13,7 @@ passes a strict 24-condition gate and types an explicit confirmation phrase.
 
 | Limit | Value |
 |---|---|
-| Planned loss per trade | max **2%** of allocated capital (hard cap on `risk_per_trade_pct`), assuming a full loss even with a stop. **Applies only when sizing by risk %** (`trade_size_usd` = null). In the default fixed-dollar mode (`trade_size_usd` set, default $1) this cap is **not applied**: a full loss of a $1 trade on $5 capital is about 20%. Fixed-dollar trades are still bounded by the available balance, the daily loss limit and the loss-streak guard |
+| Planned loss per trade | max **2%** of allocated capital (hard cap on `risk_per_trade_pct`), assuming a full loss even with a stop. **Applies to every order, in both sizing modes** (risk-% and fixed-dollar `trade_size_usd`): an order whose worst-case cost exceeds `capital × 2%` is refused, never shrunk to fit. Because the exchange minimum is 5 shares (about $3 at a 0.60 price), this means **capital of roughly $150 or more** is needed before any order can pass; the Settings page warns when Capital / Trade size cannot work |
 | Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1, must be > 0). Configurable in the dashboard Settings; a lock it triggers cannot be bypassed |
 | Consecutive losses before cooldown | max **2** (hard cap), then a cooldown of `cooldown_minutes` (default 15, allowed 1 to 1440) |
 | Concurrent positions | **1** |
@@ -314,7 +314,11 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
 3. Configure allocated capital in the dashboard or `config\runtime.json`.
    With risk-% sizing (`trade_size_usd` = null) position size is derived from
    `capital × 2% / worst-case unit cost`; it is never increased to satisfy the minimum order size.
-   The default is fixed-dollar sizing (below), where the 2% cap does not apply.
+   The default is fixed-dollar sizing (below); the same 2% cap applies to it.
+   **Minimum capital:** the exchange minimum is 5 shares, so one order costs about
+   `5 × price` (≈ $3 at 0.60). With the 2% cap that needs capital of about `$150`; a smaller capital
+   (or a `trade_size_usd` below ≈ $3) can never trade and every attempt shows `BELOW_MIN_ORDER`.
+   The Settings page shows this warning in plain words.
 
    **Capital vs balance:** `capital_usd` is the bankroll number the per-trade risk is based on;
    the balance is the actual cash (PAPER: virtual cash, LIVE: wallet USDC). In **LIVE**,
@@ -322,9 +326,9 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    refreshed only while the bot is flat and before the day's first trade. In PAPER, capital is
    the starting virtual bankroll you set.
 
-   **Fixed dollar size (default $1):** every entry buys about `trade_size_usd` dollars. It
-   defaults to `1`; change it in `config\runtime.json` or the *Trade size* field under Settings
-   (`2` → $2, `5` → $5). This is a target, not a risk override: **every** order remains capped
+   **Fixed dollar size (default $1, raise it to at least ≈ $3):** every entry buys about
+   `trade_size_usd` dollars. It defaults to `1`; change it in `config\runtime.json` or the *Trade
+   size* field under Settings (`3` → $3, `5` → $5). This is a target, not a risk override: **every** order remains capped
    at `capital × 2%` including fees and buffer, and the venue's minimum share quantity still
    applies. If the target cannot satisfy both limits, the bot refuses the entry rather than
    increasing size. Set `trade_size_usd` to `null` (empty field) to size up to the risk budget.

@@ -350,3 +350,58 @@ def capital_compatibility(
         notes.append(f"Capital {capital:.2f} supports at least one minimum-sized order under the configured risk cap.")
     notes.append("Never round a position up to meet an exchange minimum.")
     return CompatibilityReport(rows, minimum_capital, risk_pct, min_order_size, notes)
+
+
+ADVICE_REFERENCE_PRICE = Decimal("0.60")
+
+
+def capital_advice(
+    *,
+    capital: Decimal | None,
+    risk_pct: Decimal,
+    trade_size_usd: Decimal | None,
+    min_order_size: Decimal = Decimal("5"),
+    fee_buffer: Decimal = Decimal("0.002"),
+    reference_price: Decimal = ADVICE_REFERENCE_PRICE,
+) -> dict[str, str | bool | None]:
+    """Plain-language check that Capital, Trade size and the 2% risk cap can ever produce an order.
+
+    The venue's share minimum (default 5 shares) means one order costs roughly
+    ``min_order_size * price``. The risk cap (``capital * risk_pct``) must cover that, and the
+    risk cap is never raised to fit a minimum. Without this check a too-small capital just shows
+    up as endless NO_TRADE / BELOW_MIN_ORDER rows. Fees are not included, so the figures are
+    approximate (fees only raise the minimum slightly).
+    """
+    min_notional = min_order_size * reference_price
+    min_order = min_order_size * (reference_price + fee_buffer)
+    min_capital = (min_order / risk_pct).to_integral_value(rounding="ROUND_CEILING") if risk_pct > 0 else None
+    max_trade = capital * risk_pct if capital is not None and capital > 0 else None
+    pct = f"{(risk_pct * 100).normalize():f}%"
+
+    message: str | None = None
+    if capital is None or capital <= 0:
+        message = "Set Capital first: the bot does not trade without it."
+    elif max_trade is not None and max_trade < min_order:
+        message = (
+            f"No trade is possible yet. Capital ${capital:f} with the {pct} risk cap allows at most "
+            f"${max_trade:.2f} per trade, but the exchange minimum ({min_order_size:f} shares) is about "
+            f"${min_order:.2f}. Raise Capital to about ${min_capital:.0f} or more."
+        )
+    elif trade_size_usd is not None and trade_size_usd < min_notional:
+        message = (
+            f"Trade size ${trade_size_usd:f} buys fewer than the exchange minimum of {min_order_size:f} shares "
+            f"unless the share price is {trade_size_usd / min_order_size:.2f} or lower, so most orders will be "
+            f"refused. About ${min_notional:.2f} fits a typical {reference_price:f} price."
+        )
+    elif trade_size_usd is not None and max_trade is not None and trade_size_usd > max_trade:
+        message = (
+            f"Trade size ${trade_size_usd:f} is above the {pct} risk cap (${max_trade:.2f} at this "
+            f"Capital), so every order is refused. Lower it or raise Capital."
+        )
+    return {
+        "ok": message is None,
+        "message": message,
+        "min_order_usd": f"{min_order:.2f}",
+        "min_capital_usd": f"{min_capital:.0f}" if min_capital is not None else None,
+        "max_trade_usd": f"{max_trade:.2f}" if max_trade is not None else None,
+    }

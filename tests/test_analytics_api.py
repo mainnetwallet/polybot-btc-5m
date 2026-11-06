@@ -165,11 +165,11 @@ def test_dashboard_requires_authentication_and_sets_security_headers(client):
     assert "default-src 'self'" in page.headers["content-security-policy"]
     assert page.headers["x-frame-options"] == "DENY"
     assert page.headers["cache-control"] == "no-store"
-    assert 'id="cfg-momz"' in page.text
-    assert 'id="cfg-liqdrop"' in page.text
+    assert 'id="cfg-capital"' in page.text
+    assert 'id="cfg-prob"' in page.text
     script = test_client.get("/static/app.js")
     assert script.status_code == 200
-    for field in ("momentum_reversal_z", "liquidity_exit_depth_drop_pct", "dynamic_take_profit"):
+    for field in ("min_probability", "take_profit_roi", "stop_loss_roi", "daily_loss_limit_usd"):
         assert field in script.text
 
 
@@ -249,7 +249,6 @@ def test_config_is_allowlisted_and_hard_limits_rejected(client):
             "patch": {
                 "dynamic_take_profit": False,
                 "dynamic_tp_min_multiple": "0.70",
-                "dynamic_tp_max_multiple": "1.40",
                 "momentum_reversal_z": "1.80",
                 "min_hold_seconds_before_reversal": 12,
                 "liquidity_exit_depth_drop_pct": "0.50",
@@ -262,7 +261,6 @@ def test_config_is_allowlisted_and_hard_limits_rejected(client):
     cfg = store.snapshot()
     assert cfg.dynamic_take_profit is False
     assert cfg.dynamic_tp_min_multiple == Decimal("0.70")
-    assert cfg.dynamic_tp_max_multiple == Decimal("1.40")
     assert cfg.momentum_reversal_z == Decimal("1.80")
     assert cfg.min_hold_seconds_before_reversal == 12
     assert cfg.liquidity_exit_depth_drop_pct == Decimal("0.50")

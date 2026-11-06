@@ -98,8 +98,8 @@ These were found by executing the code and reading the SDK contract, not by assu
 11. **Three required hybrid-exit rules were missing or static.** A final audit against
     spec §23 found no momentum-reversal or liquidity-deterioration exit, and take-profit
     was a fixed threshold rather than dynamic. Take-profit now scales with probability and
-    time remaining (`dynamic_take_profit`, `dynamic_tp_min_multiple`,
-    `dynamic_tp_max_multiple`); momentum reversal and liquidity deterioration use
+    time remaining (`dynamic_take_profit`, `dynamic_tp_min_multiple`; the target is never
+    raised above `take_profit_roi`); momentum reversal and liquidity deterioration use
     conservative, configurable thresholds fed by the same feature snapshot as entries.
     All sit in the documented precedence after emergency/stop/trailing/take-profit.
 
@@ -125,10 +125,10 @@ These are explicit limitations of this build and must be handled before any LIVE
   operator console to resolve it while running.
 - Partial exits are disabled for every position: the exit manager requires a feasible
   full-position SELL and otherwise holds to resolution (the spec-permitted fallback).
-  The `partial_exits` feature flag therefore has no effect in this build.
+  There is no `partial_exits` setting any more: it never had an effect.
 - Correlation intelligence (ETH, broader crypto market) is not computed. The
-  `correlation_shadow` flag records the spec-mandated SHADOW default and has no trading
-  influence; enabling it requires additional feeds, trailing-window computation and
+  `correlation_shadow` flag was removed because it had no trading influence; adding it
+  back requires additional feeds, trailing-window computation and
   out-of-sample validation first.
 - The trailing stop is implemented but SHADOW by default; it only acts when the
   `trailing_stop` feature is explicitly set to ACTIVE.
