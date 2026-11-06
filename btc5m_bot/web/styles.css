@@ -303,6 +303,13 @@ td.empty { padding: 28px 14px; text-align: center; color: var(--muted); border-b
 .trading-switch { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; padding: 16px; }
 .ts-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
 .ts-text p { margin-top: 4px; max-width: 70ch; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; }
+.seg-btn { height: 34px; padding: 0 18px; border: 0; background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 13px; font-weight: 700; letter-spacing: .03em; cursor: pointer; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line-strong); }
+.seg-btn:hover:not(:disabled) { background: var(--surface-3); }
+.seg-btn[aria-pressed="true"] { background: var(--accent); color: #07162b; }
+.seg-btn.live[aria-pressed="true"] { background: var(--danger); color: #fff; }
+.seg-btn:disabled { opacity: .55; cursor: not-allowed; }
 .settings-form { display: grid; gap: 16px; }
 .group .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px 18px; align-items: end; }
 .savebar {

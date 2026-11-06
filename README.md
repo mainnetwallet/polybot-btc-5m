@@ -132,6 +132,15 @@ dashboard and press **Turn ON** to allow trading, **Turn OFF** to stop it. While
 `trading_enabled` in `config\runtime.json` and applies immediately, no restart. On the Render free plan
 the file is wiped on restart, so the switch returns to OFF until you turn it on again.
 
+### 6c. Mode switch (PAPER / LIVE)
+
+**Settings → Mode** has a **PAPER | LIVE** switch next to the trading switch (the **Go live** page offers
+the same two actions). It does not weaken any protection: **LIVE** first evaluates the live gate and, only
+if every condition passes, asks you to type `ACTIVATE LIVE TRADING`; the server checks both again.
+**PAPER** revokes LIVE and cancels all open exchange orders after a confirmation. An open LIVE position
+is **not** closed by switching: the bot does not manage it in PAPER, so close it first. The mode is not
+editable through the settings form or `/api/config`.
+
 ### 7. Approve the resolution rule
 
 Open the **Rules** tab, compare each fingerprint's rule text with the live market metadata,

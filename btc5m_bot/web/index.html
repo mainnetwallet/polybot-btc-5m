@@ -283,6 +283,18 @@
             <div><h1>Settings</h1><p class="page-sub">Trading switch and runtime configuration. Changes apply after you save.</p><p id="settings-storage" class="small muted"></p></div>
           </div>
           <div id="tab-settings">
+            <section class="card trading-switch mode-switch">
+              <div class="ts-text">
+                <div class="ts-title">Mode <span id="mode-state" class="badge">…</span></div>
+                <p class="muted small">PAPER = simulated trades with virtual money. LIVE = real orders with real funds: it needs every live-gate condition to pass and a typed confirmation.</p>
+                <p id="mode-hint" class="small muted"></p>
+              </div>
+              <div class="seg" role="group" aria-label="Trading mode">
+                <button id="mode-paper" type="button" class="seg-btn" aria-pressed="false">PAPER</button>
+                <button id="mode-live" type="button" class="seg-btn live" aria-pressed="false">LIVE</button>
+              </div>
+            </section>
+
             <section class="card trading-switch">
               <div class="ts-text">
                 <div class="ts-title">Trading <span id="trading-state" class="badge">…</span></div>

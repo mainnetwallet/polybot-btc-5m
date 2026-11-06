@@ -247,6 +247,7 @@ function renderState(s, serverTime) {
   renderDecision(s.last_decision, s.position);
   renderAlert(s.risk, s.market);
   renderGate(s.live && s.live.gate);
+  renderModeSwitch(s);
   renderAnalytics(s.analytics);
   renderPnl(s);
 }
@@ -712,6 +713,81 @@ $("revoke").addEventListener("click", async () => {
     $("revoke-phrase").value = "";
   } catch (err) { report("revoke failed: " + err.message); }
 });
+
+/* ---------------------------------------------------------------- mode switch (Settings)
+   PAPER <-> LIVE from the Settings page. This is only a second front door to the Go live page's two
+   actions: LIVE still needs every gate condition and the typed phrase, and the server re-checks both.
+   `mode` is deliberately not writable through /api/config. */
+const GATE_PENDING_KEYS = new Set(["explicit_activation", "final_confirmation"]); // satisfied by this very click
+let lastModeState = null;
+let modeBusy = false;
+
+function renderModeSwitch(s) {
+  lastModeState = s;
+  const requested = s.mode || "PAPER";
+  const effective = s.effective_mode || "PAPER";
+  const pending = requested === "LIVE" && effective !== "LIVE";
+  const state = $("mode-state");
+  badge(state, pending ? "LIVE LOCKED → PAPER" : effective, effective === "LIVE" ? "bad" : pending ? "warn" : "ok");
+  const paperBtn = $("mode-paper");
+  const liveBtn = $("mode-live");
+  paperBtn.setAttribute("aria-pressed", effective === "PAPER" ? "true" : "false");
+  liveBtn.setAttribute("aria-pressed", effective === "LIVE" ? "true" : "false");
+  paperBtn.disabled = modeBusy || requested === "PAPER";
+  liveBtn.disabled = modeBusy || effective === "LIVE";
+  const gate = s.live && s.live.gate;
+  const gateText = gate ? "Live gate: " + gate.passed_count + "/" + gate.total + " conditions passed." : "Live gate not evaluated yet.";
+  $("mode-hint").textContent = effective === "LIVE"
+    ? "Trading real funds. " + gateText
+    : pending ? "LIVE was requested but is locked, so the bot is running PAPER. " + gateText : gateText;
+}
+
+function failingGateNames(gate) {
+  const failing = gate.conditions.filter((c) => !c.passed && !GATE_PENDING_KEYS.has(c.key));
+  const shown = failing.slice(0, 3).map((c) => c.name + (c.detail ? " (" + c.detail + ")" : ""));
+  const more = failing.length - shown.length;
+  return { count: failing.length, text: shown.join("; ") + (more > 0 ? "; +" + more + " more (see Go live)" : "") };
+}
+
+async function switchModeBusy(fn) {
+  if (modeBusy) return;
+  modeBusy = true;
+  if (lastModeState) renderModeSwitch(lastModeState);
+  try { await fn(); } finally {
+    modeBusy = false;
+    if (lastModeState) renderModeSwitch(lastModeState);
+  }
+}
+
+$("mode-live").addEventListener("click", () => switchModeBusy(async () => {
+  try {
+    const checked = await api("/api/gate");
+    renderGate(checked.gate);
+    const blocked = failingGateNames(checked.gate);
+    if (blocked.count) {
+      report("LIVE blocked: " + blocked.count + " gate condition(s) failing: " + blocked.text);
+      return;
+    }
+    const phrase = window.prompt("Switching to LIVE trades REAL funds.\n\nType ACTIVATE LIVE TRADING to confirm.");
+    if (phrase === null) return;
+    const result = await post("/api/live/activate", { phrase });
+    renderGate(result.gate);
+    if (result.ok) { report("switched to LIVE"); return; }
+    const refused = failingGateNames(result.gate);
+    report("LIVE refused" + (refused.count ? ": " + refused.text : ": confirmation text did not match"));
+  } catch (err) { report("switch to LIVE failed: " + err.message); }
+}));
+
+$("mode-paper").addEventListener("click", () => switchModeBusy(async () => {
+  const openPosition = !!(lastModeState && lastModeState.position);
+  const warning = "Switch to PAPER?\n\nLIVE is revoked and every open exchange order is cancelled."
+    + (openPosition ? "\n\nThere is an OPEN position. It will NOT be managed or closed by the bot in PAPER mode: close it first, or manage it on Polymarket yourself." : "");
+  if (!window.confirm(warning)) return;
+  try {
+    await post("/api/live/revoke", { phrase: "REVOKE LIVE", reason: "switched to PAPER from Settings" });
+    report("switched to PAPER; cancel-all requested");
+  } catch (err) { report("switch to PAPER failed: " + err.message); }
+}));
 
 $("hb-confirm").addEventListener("change", (e) => {
   $("hb-test").disabled = !e.target.checked;
