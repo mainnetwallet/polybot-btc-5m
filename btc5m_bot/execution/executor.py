@@ -139,7 +139,7 @@ class ExecutionEngine:
                         "WARN",
                         market_id=market.market_id,
                         shares=str(result.filled_shares),
-                        note="partial fill below SELL minimum; hold to resolution and never submit invalid SELL",
+                        note="position below SELL minimum (dollar-sized entry or partial fill); hold to resolution, never submit an invalid SELL",
                     )
                 self.repo.add_trade(
                     market_id=market.market_id,

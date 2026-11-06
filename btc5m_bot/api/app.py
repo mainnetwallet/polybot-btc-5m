@@ -139,12 +139,25 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
             raise HTTPException(status_code=403, detail="invalid CSRF token")
         return session
 
-    def _actor(request: Request, session: Session) -> str:
-        host = request.client.host if request.client else "local"
-        return f"{session.subject}@{host}"
-
     def _client_ip(request: Request) -> str:
-        return request.client.host if request.client else "local"
+        """Real client address for rate limiting and audit.
+
+        The dashboard binds loopback only, so on Render every request arrives from the in-process
+        proxy (127.0.0.1) and one shared lockout bucket would let anyone lock the operator out.
+        Only when the direct peer is loopback is X-Forwarded-For consulted, and only its LAST entry:
+        that is the one appended by the nearest trusted proxy. Entries to its left can be forged by
+        the client and are ignored, so the header cannot be used to dodge the lockout.
+        """
+        peer = request.client.host if request.client else "local"
+        if peer in {"127.0.0.1", "::1", "localhost"}:
+            forwarded = request.headers.get("x-forwarded-for", "")
+            last = forwarded.split(",")[-1].strip() if forwarded else ""
+            if last and len(last) <= 64:
+                return last
+        return peer
+
+    def _actor(request: Request, session: Session) -> str:
+        return f"{session.subject}@{_client_ip(request)}"
 
     # ------------------------------------------------------------------ pages
     @app.get("/", include_in_schema=False)
