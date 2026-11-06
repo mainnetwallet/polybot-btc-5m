@@ -1451,9 +1451,14 @@ class BotEngine:
             if up_book and up_book.best_ask:
                 unit = up_book.best_ask + taker_fee(Decimal(1), up_book.best_ask, schedule) + cfg.fee_buffer
                 cost = market.min_order_size * unit
+                if cfg.trade_size_usd is not None:
+                    # fixed dollar size: no capital minimum, only the exchange's dollar minimum
+                    affordable = cfg.trade_size_usd >= (cfg.min_order_notional_usd or Decimal(0))
+                else:
+                    affordable = cfg.capital_usd is not None and cost <= cfg.capital_usd * cfg.risk_per_trade_pct
                 min_buy = (
                     cfg.capital_usd is not None
-                    and cost <= cfg.capital_usd * cfg.risk_per_trade_pct
+                    and affordable
                     and up_book.depth(Side.BUY) >= market.min_order_size
                 )
             min_sell = bool(

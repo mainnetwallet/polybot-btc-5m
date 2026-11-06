@@ -45,7 +45,8 @@ def intent_for(repo, market, *, shares="10", side=Side.BUY, status=OrderStatus.S
 
 
 def test_planned_loss_is_capped_at_two_percent(clock, repo):
-    risk = manager(clock, repo)
+    # the 2% cap applies to risk-% sizing (trade_size_usd = null)
+    risk = manager(clock, repo, config(trade_size_usd=None))
     ok = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("20"),
         planned_cost=Decimal("20"), balance=CAPITAL, recovery_ready=True,
@@ -60,7 +61,7 @@ def test_planned_loss_is_capped_at_two_percent(clock, repo):
 
 
 def test_planned_cost_cannot_exceed_risk_budget(clock, repo):
-    risk = manager(clock, repo)
+    risk = manager(clock, repo, config(trade_size_usd=None))
     allowed, reason, _ = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5"),
         planned_cost=Decimal("25"), balance=CAPITAL, recovery_ready=True,
@@ -451,3 +452,20 @@ def test_dynamic_take_profit_locks_a_weak_edge_earlier():
     assert decision.action is ExitAction.SELL
     assert decision.reason == "TAKE_PROFIT"
     assert decision.metadata["take_profit_target"] == Decimal("0.15")
+
+
+def test_fixed_trade_size_has_no_minimum_capital(clock, repo):
+    # fixed dollar size: a $5 trade is allowed even though it is 25% of a $20 capital
+    cfg = RuntimeConfig(capital_usd=Decimal("20"), trade_size_usd=Decimal("5"))
+    risk = manager(clock, repo, cfg)
+    allowed, reason, _ = risk.pre_trade_check(
+        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5.2"),
+        planned_cost=Decimal("5.2"), balance=Decimal("20"), recovery_ready=True,
+    )
+    assert allowed and reason is ReasonCode.OK
+    # ...but it still cannot spend more than the available balance
+    allowed, reason, _ = risk.pre_trade_check(
+        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5.2"),
+        planned_cost=Decimal("5.2"), balance=Decimal("3"), recovery_ready=True,
+    )
+    assert not allowed and reason is ReasonCode.INSUFFICIENT_BALANCE

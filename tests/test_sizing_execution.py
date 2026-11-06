@@ -291,12 +291,12 @@ def test_fixed_size_ignores_capital_size():
     assert small.notional == large.notional
 
 
-def test_fixed_size_refused_above_two_percent_cap():
-    # 2% of 100 = $2.00, a $5 trade (plus fees) would break the immutable risk cap
-    result = _fixed("5", capital="100", balance="100")
-    assert not result.allowed
-    assert result.reason is ReasonCode.RISK_LIMIT
-    assert "raise capital" in result.detail
+def test_fixed_size_has_no_minimum_capital():
+    # $5 trade on a $100 capital (5%) and even a $20 capital: allowed, no RISK_LIMIT
+    for capital in ("100", "20"):
+        result = _fixed("5", capital=capital, balance=capital)
+        assert result.allowed, result.detail
+        assert Decimal("5") <= result.notional <= Decimal("5.01")
 
 
 def test_fixed_size_below_exchange_minimum_is_refused():

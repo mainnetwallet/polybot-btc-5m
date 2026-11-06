@@ -287,11 +287,11 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
 
    **Fixed dollar size (default $1):** every entry buys about `trade_size_usd` dollars. It
    defaults to `1`; change it in `config\runtime.json` or the *Trade size* field under Settings
-   (`2` → $2, `5` → $5). Set it to `null` (empty field) to size by risk % instead. The 2% cap still applies: the order cost
-   including fees must stay at or below `capital × 2%`, so a $1 trade needs capital of about
-   $52+, $2 about $104+ (rule of thumb: capital ≥ 52 × trade size). If it does not fit, the
-   bot records `RISK_LIMIT` instead of trading. The minimum order is $1, so values below 1 are
-   refused. Positions under 5 shares cannot be sold early and are held to resolution.
+   (`2` → $2, `5` → $5). There is **no minimum capital**: the amount is whatever you set. It is
+   still limited by the available balance, the $1 minimum order, the daily loss limit and the
+   loss-streak guard. Set `trade_size_usd` to `null` (empty field) to size by risk % instead;
+   only that mode uses the `capital × 2%` cap. Positions under 5 shares cannot be sold early
+   and are held to resolution.
 4. Leave the bot PAPER until you have enough real, recorded outcomes to judge it.
    No performance claim is made here.
 

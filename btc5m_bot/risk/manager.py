@@ -190,13 +190,16 @@ class RiskManager:
         if entries_used is not None and entries_used >= cfg.max_entries_per_market:
             return False, ReasonCode.ENTRY_ALREADY_USED, "one entry per market"
 
-        risk_budget = capital * cfg.risk_per_trade_pct
         if planned_loss <= 0:
             return False, ReasonCode.RISK_LIMIT, "planned loss must be positive"
-        if planned_loss > risk_budget:
-            return False, ReasonCode.RISK_LIMIT, f"planned loss {planned_loss} exceeds {risk_budget} risk budget"
-        if planned_cost > risk_budget:
-            return False, ReasonCode.RISK_LIMIT, f"order cost {planned_cost} exceeds {risk_budget} risk budget"
+        # Fixed dollar size (trade_size_usd) is the operator's explicit per-trade amount: the
+        # %-of-capital cap and its minimum-capital requirement apply only to risk-% sizing.
+        if cfg.trade_size_usd is None:
+            risk_budget = capital * cfg.risk_per_trade_pct
+            if planned_loss > risk_budget:
+                return False, ReasonCode.RISK_LIMIT, f"planned loss {planned_loss} exceeds {risk_budget} risk budget"
+            if planned_cost > risk_budget:
+                return False, ReasonCode.RISK_LIMIT, f"order cost {planned_cost} exceeds {risk_budget} risk budget"
 
         reserved = self.repo.active_reserved_total()
         if balance is None:

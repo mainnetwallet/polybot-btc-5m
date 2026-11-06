@@ -104,8 +104,8 @@ class RuntimeConfig(BaseModel):
 
     # Fixed dollar size per trade, default $1. null = size by risk_per_trade_pct (capital x %).
     # When set, every entry buys about this many dollars of shares (1 -> $1, 2 -> $2) regardless
-    # of capital. The immutable 2%-of-capital risk cap still applies: a fixed size whose cost
-    # (incl. fees) exceeds capital x 2% is rejected with RISK_LIMIT instead of being traded.
+    # of capital: no minimum capital is required. The 2%-of-capital cap applies only when this is
+    # null; the daily loss limit, loss streak guard and available balance always apply.
     trade_size_usd: Decimal | None = Decimal("1")
 
     # Master trading switch. OFF blocks every NEW entry (TRADING_OFF). Open positions keep being

@@ -70,8 +70,6 @@ def _walk_limited(book: OrderBookSnapshot, shares: Decimal, max_price: Decimal |
 def _size_fixed(
     *,
     target: Decimal,
-    risk_pct: Decimal,
-    risk_budget: Decimal,
     available: Decimal,
     book: OrderBookSnapshot,
     min_order_size: Decimal,
@@ -85,15 +83,16 @@ def _size_fixed(
 
     The order value (shares x price) lands within one share step (~$0.01) above the target, so a
     $1 setting really sends a $1 order and can satisfy the $1 exchange minimum. Fees and the fee
-    buffer come on top. The result is never shrunk to fit: if the book, the balance or the 2% risk
-    cap cannot take the full amount, the trade is refused with a reason instead.
+    buffer come on top. There is no minimum-capital rule: the amount is whatever the operator set,
+    whatever the capital. The result is never shrunk to fit: if the book or the available balance
+    cannot take the full amount, the trade is refused with a reason instead.
     """
     best = book.best_ask
     assert best is not None
     floor_shares = share_step if min_notional_usd is not None else min_order_size
 
     def _info(**kw: Decimal) -> dict[str, Decimal]:
-        return dict(risk_budget=risk_budget, **kw)
+        return dict(risk_budget=target, **kw)
 
     # Start at the share count that certainly reaches the target at the best ask, then walk down
     # while a smaller count still reaches it (deeper levels cost more per share).
@@ -134,14 +133,6 @@ def _size_fixed(
     avg = notional / shares
     fee = taker_fee(shares, avg, schedule)
     cost = notional + fee + fee_buffer * shares
-    if cost > risk_budget:
-        return SizingResult(
-            False,
-            ReasonCode.RISK_LIMIT,
-            f"fixed trade ${target} costs ${cost:.4f} with fees, above the ${risk_budget:.4f} risk cap "
-            f"({risk_pct * 100:.2f}% of capital); lower trade_size_usd or raise capital to at least ${cost / risk_pct:.2f}",
-            **_info(capital_required=cost),
-        )
     if cost > available:
         return SizingResult(
             False,
@@ -159,8 +150,8 @@ def _size_fixed(
         fee=fee,
         worst_case_loss=cost,
         capital_required=cost,
-        risk_budget=risk_budget,
-        max_by_risk=floor_to_step(risk_budget / (best + fee / shares + fee_buffer), share_step),
+        risk_budget=target,
+        max_by_risk=shares,
         max_by_balance=floor_to_step(available / (best + fee / shares + fee_buffer), share_step),
         max_by_depth=floor_to_step(sum((l.size for l in book.asks if max_price is None or l.price <= max_price), Decimal(0)), share_step),
         min_order_cost=min_notional_usd if min_notional_usd is not None else min_order_size * (best + fee_buffer),
@@ -186,7 +177,7 @@ def size_position(
     """Size a BUY inside the risk budget.
 
     ``fixed_notional_usd`` buys a fixed dollar amount per trade (see ``_size_fixed``); the
-    risk-percent budget is then only a ceiling, never a target.
+    risk-percent budget and the minimum-capital rule do not apply to it.
 
     ``min_notional_usd`` switches the entry minimum from a share count to a dollar amount
     (marketable BUYs are denominated in collateral). The size is still never raised to meet it:
@@ -208,8 +199,6 @@ def size_position(
     if fixed_notional_usd is not None:
         return _size_fixed(
             target=fixed_notional_usd,
-            risk_pct=risk_pct,
-            risk_budget=risk_budget,
             available=available,
             book=book,
             min_order_size=min_order_size,
