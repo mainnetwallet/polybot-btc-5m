@@ -41,6 +41,8 @@ def settings(tmp_path: Path) -> Settings:
         clob_api_key="test-key",
         clob_api_secret="test-secret",
         clob_api_passphrase="test-pass",
+        auto_approve_rules=False,
+        default_capital_usd=None,
     )
     s.ensure_dirs()
     return s

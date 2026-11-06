@@ -64,13 +64,6 @@ services:
         value: /tmp/polybot/config
       - key: POLYBOT_HEARTBEAT_ENABLED
         value: "false"
-      # The free plan wipes /tmp on every restart, so capital and rule approval are re-applied
-      # from here at each start. Set the capital in the Render dashboard (Environment).
-      - key: POLYBOT_DEFAULT_CAPITAL_USD
-        sync: false
-      # PAPER mode only; ignored whenever the effective mode is LIVE.
-      - key: POLYBOT_AUTO_APPROVE_RULES
-        value: "true"
       # Serve the dashboard on the public port (login-protected). "false" = health endpoints only.
       - key: POLYBOT_PUBLIC_DASHBOARD
         value: "true"

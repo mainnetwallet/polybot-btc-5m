@@ -251,14 +251,15 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
   free web services in the workspace, and one always-on service uses about 730 of them. When the
   hours run out, every free web service in the workspace is suspended until the next month.
 
-**Do not set capital and rules by hand after every restart.** Set these environment variables once
-in the Render dashboard (Environment); they are re-applied at every start:
+**Capital and rules are set by default.** Every start applies capital `1000` (paper money) and
+auto-approves resolution rules in PAPER mode, so nothing has to be set after a restart. No Render
+variable is needed. To change the behaviour, set these (all optional):
 
-| Variable | Effect |
-|---|---|
-| `POLYBOT_DEFAULT_CAPITAL_USD` | allocated capital, used while `runtime.json` has none |
-| `POLYBOT_AUTO_APPROVE_RULES=true` | approves every resolution rule automatically, **PAPER mode only** (never in LIVE) |
-| `POLYBOT_APPROVED_RULE_FINGERPRINTS` | comma separated fingerprints approved in any mode (use this for LIVE) |
+| Variable | Default | Effect |
+|---|---|---|
+| `POLYBOT_DEFAULT_CAPITAL_USD` | `1000` | capital applied while `runtime.json` has none |
+| `POLYBOT_AUTO_APPROVE_RULES` | `true` | approves every resolution rule, **PAPER mode only** (never in LIVE) |
+| `POLYBOT_APPROVED_RULE_FINGERPRINTS` | empty | fingerprints approved in any mode (use this for LIVE) |
 
 Auto-approvals are written to the audit log as `env-auto-approve`.
 

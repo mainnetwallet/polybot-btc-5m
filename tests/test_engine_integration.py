@@ -368,6 +368,7 @@ def test_default_capital_env_applied_on_boot(tmp_path, monkeypatch):
         logs_dir=tmp_path / "logs",
         config_dir=tmp_path / "config",
         default_capital_usd=Decimal("500"),
+        auto_approve_rules=False,
     )
     s.ensure_dirs()
     engine, db_engine = build_default_engine(s, start_api=False)
