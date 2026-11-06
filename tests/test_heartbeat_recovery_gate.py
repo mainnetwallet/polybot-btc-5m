@@ -482,7 +482,7 @@ def test_recovery_reconciles_sell_fill_from_confirmed_order_trades(clock, repo, 
     assert len(trades) == 1
     assert trades[0].kind == "EXIT_RECOVERY"
     # A second recovery pass must be idempotent.
-    asyncio.run(RecoveryManager(repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE).run())
+    asyncio.run(RecoveryManager(repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE).run(now=order_created + timedelta(seconds=2)))
     trades_again = [t for t in repo.list_trades(mode="LIVE") if t.client_order_id == intent.client_order_id]
     assert len(trades_again) == 1
 
@@ -513,7 +513,7 @@ def test_recovery_blocks_sell_fill_when_fee_rate_does_not_match_market(clock, re
         trade_id="trade-2", order_id="ex-sell-2", asset_id=position.asset_id,
         condition_id=position.condition_id, side="SELL", trader_side="TAKER",
         shares=Decimal("5"), price=Decimal("0.45"), fee_rate_bps=Decimal("900"),
-        status="CONFIRMED", matched_at=START, transaction_hash="0xconfirmed",
+        status="CONFIRMED", matched_at=repo.get_order(intent.client_order_id).created_at, transaction_hash="0xconfirmed",
     )]
     order_created = repo.get_order(intent.client_order_id).created_at
     result = asyncio.run(RecoveryManager(
