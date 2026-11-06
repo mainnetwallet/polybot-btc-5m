@@ -248,6 +248,7 @@ function renderState(s, serverTime) {
   renderAlert(s.risk, s.market);
   renderGate(s.live && s.live.gate);
   renderAnalytics(s.analytics);
+  renderPnl(s);
 }
 
 function renderMarket(m) {
@@ -443,6 +444,48 @@ function renderRisk(risk) {
     ["kill switch", risk.kill_switch ? "ENGAGED" : "off", risk.kill_switch ? "down" : "up"],
     ["kill reason", risk.kill_reason],
   ]);
+}
+
+
+/* Live profit/loss: closed trades (analytics) + today (risk) + the open position's mark-to-market. */
+function renderPnl(s) {
+  const box = $("pnl");
+  if (!box) return;
+  clear(box);
+  const mode = String(s.effective_mode || "PAPER").toLowerCase();
+  const perf = (s.analytics && s.analytics[mode]) || null;
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const signed = (n) => (n >= 0 ? "+" : "") + n.toFixed(2);
+  const cls = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
+
+  const realized = perf ? num(perf.net_pnl) : 0;
+  const unreal = s.position && s.position.unrealized_pnl !== null && s.position.unrealized_pnl !== undefined
+    ? num(s.position.unrealized_pnl) : 0;
+  const total = realized + unreal;
+  const today = s.risk ? num(s.risk.daily_pnl) : 0;
+  const wins = perf ? perf.wins : 0;
+  const losses = perf ? perf.losses : 0;
+  const closed = wins + losses + (perf ? perf.flats : 0);
+
+  const top = el("div", "pnl-total");
+  top.appendChild(el("span", "pnl-big " + cls(total), signed(total) + " USDT"));
+  top.appendChild(el("span", "muted small", "total now (" + mode.toUpperCase() + ")"));
+  box.appendChild(top);
+
+  const grid = el("div", "pnl-grid");
+  const cell = (label, value, tone) => {
+    const c = el("div", "pnl-cell");
+    c.appendChild(el("span", "muted small", label));
+    c.appendChild(el("span", "pnl-val " + (tone || ""), value));
+    grid.appendChild(c);
+  };
+  cell("Wins", String(wins), wins ? "up" : "");
+  cell("Losses", String(losses), losses ? "down" : "");
+  cell("Win rate", closed && perf && perf.win_rate !== null ? (perf.win_rate * 100).toFixed(0) + "%" : "—");
+  cell("Today", signed(today), cls(today));
+  cell("Closed P&L", signed(realized), cls(realized));
+  cell("Open P&L", s.position ? signed(unreal) : "—", s.position ? cls(unreal) : "");
+  box.appendChild(grid);
 }
 
 function fmtUsdt(v) {

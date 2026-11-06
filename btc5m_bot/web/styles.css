@@ -378,3 +378,11 @@ td.empty { padding: 20px 12px; color: var(--muted); border-bottom: 0; }
 .dc-row, .dc-why, .dc-pos { overflow-wrap: anywhere; }
 .dc-pos { padding-top: 8px; border-top: 1px solid var(--line); }
 .dc-time { font: 11px/1.4 var(--mono); }
+
+/* ---- live profit / loss ---- */
+.pnl { display: grid; gap: 12px; }
+.pnl-total { display: grid; gap: 2px; }
+.pnl-big { font: 700 28px/1.1 var(--mono); }
+.pnl-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
+.pnl-cell { display: grid; gap: 2px; }
+.pnl-val { font: 600 15px/1.2 var(--mono); }

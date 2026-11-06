@@ -1060,6 +1060,7 @@ class BotEngine:
             return
         if outcome_result.result.filled_shares > 0:
             self.state.increment("exits")
+            self._last_analytics = float("-inf")
             update = self.risk.record_result(
                 realized_pnl=outcome_result.realized_pnl,
                 market_id=market.market_id,
@@ -1241,6 +1242,7 @@ class BotEngine:
                         realized = settlement.realized_pnl
             self.risk.record_result(realized_pnl=realized, market_id=market.market_id, mode=self._effective_mode, now=now)
             self.state.increment("settlements")
+            self._last_analytics = float("-inf")  # show the new win/loss right away
             self._note(
                 now,
                 "SETTLE",
@@ -1405,6 +1407,7 @@ class BotEngine:
                 "status": position.status,
                 "mark": _dec(mark),
                 "roi": _dec((mark * position.shares - position.cost_basis) / position.cost_basis) if mark and position.cost_basis else None,
+                "unrealized_pnl": _dec(mark * position.shares - position.cost_basis) if mark is not None else None,
             }
         feeds = self._feeds_payload(now, self._composite)
         books = {}
