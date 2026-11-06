@@ -23,14 +23,14 @@ def obs(ts, value, *, source="chainlink", window=60):
     return TwapObservation(ts=ts, value=Decimal(value), source=source, window_seconds=window)
 
 
-def spec(*, tie="UP", methodology=Methodology.TWAP_60S, source="CHAINLINK", window=60):
+def spec(*, tie="UP", methodology=Methodology.TWAP_60S, source="CHAINLINK", window=60, precision="2", rounding="ROUND_HALF_UP"):
     return ResolutionRuleSpec(
         fingerprint="fp",
         methodology=methodology,
         source=source,
         tie_rule=tie,
-        precision="2",
-        rounding="DOCUMENTED",
+        precision=precision,
+        rounding=rounding,
         window_seconds=window,
         text="Chainlink 60-second TWAP; greater than or equal resolves UP",
         confidence="HIGH",
@@ -129,6 +129,16 @@ def test_simulator_resolves_with_exact_methodology():
     assert result.coverage_pct >= 90
 
 
+def test_simulator_applies_documented_rounding_before_comparison():
+    tracker = dense_tracker(start_value="100.004", end_value="100.003")
+    result = resolve_market(spec(), tracker, START, END)
+    assert result.valid
+    assert result.tie
+    assert result.outcome is Outcome.UP
+    assert result.opening_reference == Decimal("100.00")
+    assert result.closing_reference == Decimal("100.00")
+
+
 def test_simulator_tie_uses_rule_tie_direction():
     tracker = dense_tracker(start_value="100", end_value="100")
     up = resolve_market(spec(tie="UP"), tracker, START, END)
@@ -162,6 +172,10 @@ def test_simulator_refuses_unknown_rules():
     result = resolve_market(spec(tie="UNKNOWN"), tracker, START, END)
     assert not result.valid and result.validation == "UNKNOWN_RULES"
     result = resolve_market(spec(source="NOT_CHAINLINK"), tracker, START, END)
+    assert not result.valid and result.validation == "UNKNOWN_RULES"
+    result = resolve_market(spec(precision="UNKNOWN"), tracker, START, END)
+    assert not result.valid and result.validation == "UNKNOWN_RULES"
+    result = resolve_market(spec(rounding="DOCUMENTED"), tracker, START, END)
     assert not result.valid and result.validation == "UNKNOWN_RULES"
 
 

@@ -120,10 +120,16 @@ def build_rule_spec(market: dict[str, Any], event_start: datetime, version: str)
         warnings.append("precision/rounding not documented")
 
     rounding = "UNKNOWN"
-    if "rounded" in combined:
-        rounding = "DOCUMENTED"
-    else:
-        warnings.append("rounding rule not documented")
+    if re.search(r"round(?:ed|ing)?\s+half[- ]up", combined):
+        rounding = "ROUND_HALF_UP"
+    elif re.search(r"round(?:ed|ing)?\s+half[- ]down", combined):
+        rounding = "ROUND_HALF_DOWN"
+    elif re.search(r"round(?:ed|ing)?\s+(?:down|toward zero)|\btruncate(?:d)?\b", combined):
+        rounding = "ROUND_DOWN"
+    elif re.search(r"round(?:ed|ing)?\s+up", combined):
+        rounding = "ROUND_UP"
+    if rounding == "UNKNOWN":
+        warnings.append("rounding algorithm not explicitly documented")
 
     window = methodology.window_seconds
     canonical = json.dumps(

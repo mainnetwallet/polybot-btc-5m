@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_DOWN, ROUND_HALF_UP, ROUND_UP
 from typing import Any
 
 from ..markets.rules import ResolutionRuleSpec
@@ -82,6 +82,27 @@ def resolve_market(
         return ResolutionResult(
             None, None, None, False, "LOW", "UNKNOWN_RULES", "source is not Chainlink", method.value
         )
+    rounding_modes = {
+        "ROUND_HALF_UP": ROUND_HALF_UP,
+        "ROUND_HALF_DOWN": ROUND_HALF_DOWN,
+        "ROUND_DOWN": ROUND_DOWN,
+        "ROUND_UP": ROUND_UP,
+    }
+    if rule.precision == "UNKNOWN" or rule.rounding not in rounding_modes:
+        return ResolutionResult(
+            None, None, None, False, "LOW", "UNKNOWN_RULES",
+            "price precision or rounding algorithm is not explicitly documented", method.value,
+        )
+    try:
+        precision = int(rule.precision)
+    except (TypeError, ValueError):
+        precision = -1
+    if precision < 0 or precision > 18:
+        return ResolutionResult(
+            None, None, None, False, "LOW", "UNKNOWN_RULES",
+            "price precision is outside the supported range", method.value,
+        )
+    quantum = Decimal(1).scaleb(-precision)
 
     if method is Methodology.SNAPSHOT:
         # No snapshot feed is ingested; never fake it.
@@ -143,11 +164,13 @@ def resolve_market(
             coverage_pct=coverage_pct,
         )
 
-    tie = opening.value == closing.value
+    opening_reference = opening.value.quantize(quantum, rounding=rounding_modes[rule.rounding])
+    closing_reference = closing.value.quantize(quantum, rounding=rounding_modes[rule.rounding])
+    tie = opening_reference == closing_reference
     if tie:
         outcome = Outcome.UP if rule.tie_rule == "UP" else Outcome.DOWN
     else:
-        outcome = Outcome.UP if closing.value > opening.value else Outcome.DOWN
+        outcome = Outcome.UP if closing_reference > opening_reference else Outcome.DOWN
 
     if rule.confidence == "HIGH" and coverage_pct >= 90 and (opening_age or 0) <= 5 and (closing_age or 0) <= 5:
         confidence = "HIGH"
@@ -158,8 +181,8 @@ def resolve_market(
 
     return ResolutionResult(
         outcome=outcome,
-        opening_reference=opening.value,
-        closing_reference=closing.value,
+        opening_reference=opening_reference,
+        closing_reference=closing_reference,
         tie=tie,
         confidence=confidence,
         validation="VALID",

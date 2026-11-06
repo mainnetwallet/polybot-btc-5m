@@ -96,7 +96,21 @@ def test_rule_spec_parses_chainlink_tie_precision_and_rounding():
     assert spec.source == "CHAINLINK"
     assert spec.tie_rule == "UP"
     assert spec.precision == "2"
-    assert spec.rounding == "DOCUMENTED"
+    assert spec.rounding == "UNKNOWN"
+    assert spec.confidence == "MEDIUM"
+
+
+def test_rule_spec_only_accepts_explicit_rounding_algorithm():
+    market = _raw_market(
+        description=(
+            "Resolves UP when the 60-second Chainlink BTC/USD TWAP at the end is "
+            "greater than or equal to the opening value. Prices are rounded half up "
+            "to 2 decimal places."
+        )
+    )
+    spec = build_rule_spec(market, START, "1")
+    assert spec.precision == "2"
+    assert spec.rounding == "ROUND_HALF_UP"
     assert spec.confidence == "HIGH"
 
 

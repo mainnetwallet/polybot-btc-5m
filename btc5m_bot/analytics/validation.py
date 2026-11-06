@@ -32,7 +32,17 @@ def _bootstrap_mean_ci(values: list[float], *, confidence: float) -> tuple[float
         return None, None
     rng = random.Random(BOOTSTRAP_SEED)
     n = len(values)
-    means = sorted(sum(rng.choices(values, k=n)) / n for _ in range(BOOTSTRAP_ITERATIONS))
+    # Circular moving-block bootstrap preserves short-range dependence between adjacent
+    # trades. sqrt(n) is a transparent heuristic; this remains a diagnostic, not walk-forward proof.
+    block_length = max(1, int(n ** 0.5))
+    means = []
+    for _ in range(BOOTSTRAP_ITERATIONS):
+        sample: list[float] = []
+        while len(sample) < n:
+            start = rng.randrange(n)
+            sample.extend(values[(start + offset) % n] for offset in range(block_length))
+        means.append(sum(sample[:n]) / n)
+    means.sort()
     tail = (1.0 - confidence) / 2.0
     low = means[max(0, int(tail * len(means)) - 1)]
     high = means[min(len(means) - 1, int((1 - tail) * len(means)))]

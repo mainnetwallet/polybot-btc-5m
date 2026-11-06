@@ -2,8 +2,9 @@
 
 The Polymarket heartbeat has irreversible semantics: the first accepted send arms a
 key-wide timeout-cancel-all for every resting order under the API key, and there is
-no disarm operation. POLYBOT therefore only ever sends when LIVE is explicitly
-authorised, the engine lease is fresh, and a dedicated API key is configured.
+no disarm operation. Before arming, POLYBOT requires explicit LIVE authorisation.
+After the one-way arm test, the worker must maintain heartbeat-only keepalive even
+when trading is back in PAPER; the engine lease and dedicated API key remain required.
 """
 from __future__ import annotations
 
@@ -96,6 +97,7 @@ def validate_heartbeat_configuration(
     activation_active: bool,
     dedicated_key_confirmed: bool,
     test_recorded: bool,
+    keepalive_only: bool = False,
 ) -> HeartbeatSafetyCheck:
     creds_present = all(
         secret is not None and secret.get_secret_value()
@@ -105,8 +107,8 @@ def validate_heartbeat_configuration(
     lease_ok = 0 < settings.heartbeat_lease_seconds < 10
     checks = (
         ("heartbeat_enabled", settings.heartbeat_enabled, "POLYBOT_HEARTBEAT_ENABLED must be true"),
-        ("live_mode", live_mode, "runtime mode must be LIVE"),
-        ("live_activation", activation_active, "no active LIVE activation"),
+        ("live_mode", live_mode or keepalive_only, "runtime mode must be LIVE unless in armed keepalive-only mode"),
+        ("live_activation", activation_active or keepalive_only, "no active LIVE activation outside keepalive-only mode"),
         ("credentials_present", creds_present, "CLOB API credentials are incomplete"),
         ("dedicated_key", dedicated_key_confirmed, "dedicated heartbeat API key not confirmed"),
         ("interval", interval_ok, f"send interval {settings.heartbeat_interval_seconds}s must be 3-6s"),
@@ -184,14 +186,16 @@ class HeartbeatWorker:
         # The first accepted heartbeat arms a key-wide cancel-all that cannot be undone, and the
         # worker is a separate process that may have started long before this send. Re-check the
         # whole safety configuration every time instead of trusting what held at start-up.
-        # ``live_allowed`` already covers "LIVE mode" and "activation active".
+        # ``live_allowed`` covers active LIVE trading or a previously armed keepalive-only state.
         live = self.live_allowed()
+        test_recorded = bool(self.repo.get_state("heartbeat_test", {}).get("ok"))
         check = validate_heartbeat_configuration(
             self.settings,
             live_mode=live,
             activation_active=live,
             dedicated_key_confirmed=self.settings.heartbeat_dedicated_key_confirmed,
-            test_recorded=bool(self.repo.get_state("heartbeat_test", {}).get("ok")),
+            test_recorded=test_recorded,
+            keepalive_only=test_recorded,
         )
         if not check.ok:
             reason = "; ".join(check.failures)
@@ -235,9 +239,8 @@ class HeartbeatWorker:
         log.warning("heartbeat worker ACTIVE: first accepted send arms key-wide cancel-all")
         while not self._stop.is_set():
             if not self.live_allowed():
-                # Revocation stops sends. The platform deadline may then cancel resting
-                # orders, which is the intended fail-safe for a revoked LIVE session.
-                # Stay resident and idle so an operator can re-activate without a restart.
+                # Before the one-way arm test, remain idle until explicitly authorised.
+                # After arming, the supervisor keeps live_allowed true for keepalive-only mode.
                 while not self._stop.is_set() and not self.live_allowed():
                     self.repo.set_state(
                         "heartbeat",

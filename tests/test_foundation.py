@@ -13,6 +13,12 @@ from btc5m_bot.types import Mode, floor_to_step
 from btc5m_bot.exchange.fees import FeeSchedule, maker_fee, taker_fee
 
 
+def test_sqlite_uses_full_synchronous_for_durable_order_journal(db):
+    with db.connect() as conn:
+        synchronous = conn.exec_driver_sql("PRAGMA synchronous").scalar_one()
+    assert synchronous == 2  # SQLite FULL
+
+
 def test_risk_limits_are_immutable():
     with pytest.raises(HardLimitError):
         RuntimeConfig(risk_per_trade_pct=Decimal("0.021"))

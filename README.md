@@ -297,13 +297,12 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
 
    **Fixed dollar size (default $1):** every entry buys about `trade_size_usd` dollars. It
    defaults to `1`; change it in `config\runtime.json` or the *Trade size* field under Settings
-   (`2` → $2, `5` → $5). There is **no minimum capital**: the amount is whatever you set. It is
-   still limited by the available balance, the $1 minimum order, the daily loss limit and the
-   loss-streak guard. Set `trade_size_usd` to `null` (empty field) to size by risk % instead;
-   only that mode uses the `capital × 2%` cap. In fixed-dollar mode the planned loss can be a large
-   share of capital (a $1 trade on $5 capital risks about 20%). Exits are market (FOK) orders,
-   which have no minimum size, so a position of any size, including under 5 shares, can be sold
-   early.
+   (`2` → $2, `5` → $5). This is a target, not a risk override: **every** order remains capped
+   at `capital × 2%` including fees and buffer, and the venue's minimum share quantity still
+   applies. If the target cannot satisfy both limits, the bot refuses the entry rather than
+   increasing size. Set `trade_size_usd` to `null` (empty field) to size up to the risk budget.
+   Do not assume a marketable FOK/FAK order is exempt from the CLOB minimum share size; exits
+   below the current book minimum are treated as unverified and blocked.
 4. Leave the bot PAPER until you have enough real, recorded outcomes to judge it.
    No performance claim is made here.
 
@@ -344,10 +343,12 @@ Polymarket heartbeat expiry performs a **cancel-all for the entire API key**. Th
 accepted heartbeat **arms this permanently**; there is no disarm endpoint. Therefore:
 
 - heartbeat is disabled by default (`POLYBOT_HEARTBEAT_ENABLED=false`)
-- it never sends unless LIVE is active, the engine lease is fresh, and the gate passed
+- before the first send, all LIVE preflight checks must pass and the operator must type the explicit arm phrase
+- after the first accepted heartbeat, the worker continues heartbeat-only keepalive in PAPER/revoked mode while the engine lease is fresh; this prevents the armed key's timeout from triggering cancel-all
+- heartbeat keepalive does not enable trading; LIVE order submission still requires the separate active LIVE authorization and gate
 - use a dedicated key used by **no other software**
 - set `POLYBOT_HEARTBEAT_DEDICATED_KEY_CONFIRMED=true` only when that is true
-- the gate requires a recorded heartbeat test; the operator must explicitly arm it
+- stopping the heartbeat worker after arming allows the platform timeout to cancel all orders on that API key
 
 Never arm the heartbeat during development.
 
@@ -390,9 +391,9 @@ acknowledgement window.
 ### Execution
 
 - Write-ahead order journal with idempotency keys
-- FOK/FAK book walking with slippage, fees, and partial-fill accounting
+- FOK/FAK book walking with slippage, fees, and partial-fill accounting; minimum share constraints are enforced conservatively
 - Exchange `UNKNOWN` results are never blindly retried
-- Exits are market (FOK) SELLs: the 5-share minimum is a LIMIT-order rule only, so any position size can be sold early
+- Exit feasibility checks the book's minimum share quantity; the bot does not assume an undocumented market-order exemption
 - Every entry and exit decision is logged with a reason code
 
 ### Data

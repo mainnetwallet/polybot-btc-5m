@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable
@@ -42,6 +43,30 @@ log = logging.getLogger(__name__)
 
 USDC_DECIMALS = Decimal(1_000_000)
 FILL_TOLERANCE = Decimal("0.000001")
+
+
+def _verify_wallet_identity(client: Any, settings: Settings) -> None:
+    """Fail closed unless the SDK-detected wallet type and wallet match operator config."""
+    signature_by_wallet_type = {
+        "EOA": 0,
+        "POLY_PROXY": 1,
+        "GNOSIS_SAFE": 2,
+        "DEPOSIT_WALLET": 3,
+    }
+    wallet_type = str(getattr(client, "wallet_type", "")).upper()
+    detected_signature_type = signature_by_wallet_type.get(wallet_type)
+    if detected_signature_type is None:
+        raise ExchangeError(f"SDK returned an unknown wallet type: {wallet_type or 'missing'}")
+    if detected_signature_type != int(settings.signature_type):
+        raise ExchangeError(
+            f"configured signature_type={settings.signature_type} does not match "
+            f"SDK-detected {wallet_type} signature type {detected_signature_type}"
+        )
+    actual_wallet = str(getattr(client, "wallet", "")).strip()
+    if not re.fullmatch(r"0x[0-9a-fA-F]{40}", actual_wallet):
+        raise ExchangeError("SDK did not expose a valid authenticated wallet address")
+    if settings.funder_address and actual_wallet.lower() != settings.funder_address.strip().lower():
+        raise ExchangeError("SDK-authenticated wallet does not match configured funder_address")
 
 
 def _to_decimal(value: Any, default: str = "0") -> Decimal:
@@ -160,6 +185,14 @@ class PolymarketAdapter(ExchangeAdapter):
                     if self.settings.funder_address:
                         kwargs["wallet"] = self.settings.funder_address
                     self._secure = await AsyncSecureClient.create(**kwargs)
+            try:
+                _verify_wallet_identity(self._secure, self.settings)
+            except Exception:
+                try:
+                    await self._secure.close()
+                finally:
+                    self._secure = None
+                raise
         return self._secure
 
     async def discover_markets(self, now: datetime) -> list[MarketInfo]:

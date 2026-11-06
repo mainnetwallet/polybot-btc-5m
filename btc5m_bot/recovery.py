@@ -68,7 +68,16 @@ class RecoveryManager:
             except Exception as exc:  # noqa: BLE001 - any integrity failure blocks trading
                 blocks.append(f"database integrity check failed: {exc}")
 
-        local_orders = self.repo.open_orders(self.mode.value)
+        local_orders_by_id = {row.client_order_id: row for row in self.repo.open_orders(self.mode.value)}
+        # FOK/FAK partial fills are terminal at the venue, but a crash can occur after the
+        # order journal records the fill and before the position row is written. Reconcile
+        # those rows too; treating them as ordinary closed orders can lose real exposure.
+        for row in self.repo.list_orders(
+            mode=self.mode.value, statuses=[OrderStatus.PARTIAL.value], limit=500
+        ):
+            if row.order_type.upper() in {"FOK", "FAK"}:
+                local_orders_by_id[row.client_order_id] = row
+        local_orders = list(local_orders_by_id.values())
         exchange_open: dict[str, ExchangeOpenOrder] = {}
         exchange_positions: dict[str, ExchangePosition] = {}
 
@@ -174,11 +183,12 @@ class RecoveryManager:
         if current is not None:
             status = str(current.status or "").lower()
             matched = Decimal(current.size_matched or 0)
-            if status in {"cancelled", "canceled", "expired"}:
+            terminal_cancel = status in {"cancelled", "canceled", "expired"}
+            if matched <= 0 and terminal_cancel:
                 self.repo.update_order(
                     row.client_order_id,
                     status=OrderStatus.CANCELLED.value,
-                    filled_shares=matched,
+                    filled_shares=Decimal(0),
                     cancelled_at=now,
                     error_code="RECOVERED_CANCELLED",
                 )
@@ -186,7 +196,22 @@ class RecoveryManager:
                 notes.append(f"order {row.client_order_id} confirmed {status}")
                 return True
             if matched > 0:
-                price = Decimal(current.price or 0)
+                if row.side.upper() != "BUY":
+                    blocks.append(
+                        f"exit order {row.client_order_id} has recovered fills but trade-level fill price/fee reconciliation is unavailable"
+                    )
+                    return False
+                if position is None or Decimal(position.avg_price or 0) <= 0:
+                    blocks.append(
+                        f"buy order {row.client_order_id} has {matched} matched shares but the exchange position/average fill price is not yet visible"
+                    )
+                    return False
+                if abs(Decimal(position.size) - matched) > SIZE_TOLERANCE:
+                    blocks.append(
+                        f"buy order {row.client_order_id} matched {matched} shares but exchange position is {position.size}; manual reconciliation required"
+                    )
+                    return False
+                price = Decimal(position.avg_price)
                 status_value = (
                     OrderStatus.FILLED.value
                     if matched >= Decimal(row.shares) - SIZE_TOLERANCE
@@ -198,10 +223,14 @@ class RecoveryManager:
                     filled_shares=matched,
                     avg_price=price,
                     acked_at=row.acked_at or now,
+                    cancelled_at=now if terminal_cancel else row.cancelled_at,
+                    error_code="RECOVERED_PARTIAL_CANCELLED" if terminal_cancel else row.error_code,
                 )
-                if status_value == OrderStatus.FILLED.value:
+                if status_value == OrderStatus.FILLED.value or terminal_cancel or (
+                    status_value == OrderStatus.PARTIAL.value and row.order_type.upper() in {"FOK", "FAK"}
+                ):
                     self.repo.release_reservation(row.client_order_id, status="CONSUMED")
-                self._adopt_position(row, matched, price, notes)
+                self._adopt_position(row, matched, price, Decimal(row.fee_usd or 0), notes)
                 notes.append(f"order {row.client_order_id} reconciled as {status_value} ({matched} shares)")
                 return True
             # Still working with no fill: cancel it during recovery and verify.
@@ -230,19 +259,35 @@ class RecoveryManager:
             return False
 
         # Order not found on the exchange. If the matching position proves a fill, adopt it.
-        if position is not None and position.size >= Decimal(row.shares) - SIZE_TOLERANCE:
-            price = Decimal(position.avg_price or row.price or 0)
+        if position is not None and Decimal(position.size) > 0:
+            if row.side.upper() != "BUY":
+                blocks.append(
+                    f"exit order {row.client_order_id} is absent from open orders but its position changed; trade-level fill reconciliation is required"
+                )
+                return False
+            if Decimal(position.avg_price or 0) <= 0 or Decimal(position.size) > Decimal(row.shares) + SIZE_TOLERANCE:
+                blocks.append(
+                    f"exchange position for {row.client_order_id} cannot be safely attributed to this order"
+                )
+                return False
+            matched = Decimal(position.size)
+            price = Decimal(position.avg_price)
+            status_value = (
+                OrderStatus.FILLED.value
+                if matched >= Decimal(row.shares) - SIZE_TOLERANCE
+                else OrderStatus.PARTIAL.value
+            )
             self.repo.update_order(
                 row.client_order_id,
-                status=OrderStatus.FILLED.value,
-                filled_shares=Decimal(row.shares),
+                status=status_value,
+                filled_shares=matched,
                 avg_price=price,
                 filled_at=now,
                 error_code="RECOVERED_FROM_POSITION",
             )
             self.repo.release_reservation(row.client_order_id, status="CONSUMED")
-            self._adopt_position(row, Decimal(row.shares), price, notes)
-            notes.append(f"order {row.client_order_id} inferred filled from exchange position")
+            self._adopt_position(row, matched, price, Decimal(row.fee_usd or 0), notes)
+            notes.append(f"order {row.client_order_id} inferred {status_value} from exchange position")
             return True
 
         blocks.append(
@@ -250,7 +295,7 @@ class RecoveryManager:
         )
         return False
 
-    def _adopt_position(self, row, shares: Decimal, price: Decimal, notes: list[str]) -> None:
+    def _adopt_position(self, row, shares: Decimal, price: Decimal, entry_fee: Decimal, notes: list[str]) -> None:
         if row.side.upper() != "BUY":
             notes.append(f"exit order {row.client_order_id} reconciled; position accounting requires review")
             return
@@ -264,7 +309,7 @@ class RecoveryManager:
             outcome=row.outcome,
             shares=shares,
             avg_price=price,
-            entry_fee=Decimal(0),
+            entry_fee=entry_fee,
             mode=self.mode.value,
         )
         self.repo.add_protection_event(

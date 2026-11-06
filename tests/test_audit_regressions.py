@@ -250,12 +250,18 @@ def test_sdk_sell_sends_the_intent_limit_as_min_price(clock, repo):
     seen = {}
 
     class Client:
+        wallet_type = "EOA"
+        wallet = "0x" + "1" * 40
+
         async def place_market_order(self, **kwargs):
             seen.update(kwargs)
             return SimpleNamespace(ok=False, code="X", message="x")
 
     settings = SimpleNamespace(
-        private_key=SecretStr("0x" + "1" * 64), gamma_url="http://localhost",
+        private_key=SecretStr("0x" + "1" * 64),
+        gamma_url="http://localhost",
+        signature_type=0,
+        funder_address="0x" + "1" * 40,
     )
     adapter = PolymarketAdapter(settings, secure_factory=lambda s: Client())
     market = make_market()

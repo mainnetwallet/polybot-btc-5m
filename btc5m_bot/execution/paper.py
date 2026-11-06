@@ -65,6 +65,44 @@ class PaperBroker:
         self.rng = random.Random(seed)
         self.positions: dict[str, PaperPosition] = {}
         self.fills: list[OrderResult] = []
+        self.has_history = False
+
+    @classmethod
+    def restore_from_repository(cls, capital: Decimal, clock: Clock, repo, **kwargs) -> "PaperBroker":
+        """Rebuild PAPER cash and open positions from the durable SQL ledger."""
+        broker = cls(capital, clock, **kwargs)
+        trades = repo.list_trades(mode="PAPER", limit=1_000_000)
+        if trades:
+            broker.has_history = True
+            for trade in reversed(trades):
+                price = Decimal(str(trade.price))
+                shares = Decimal(str(trade.shares))
+                fee = Decimal(str(trade.fee))
+                kind = str(trade.kind).upper()
+                side = str(trade.side).upper()
+                if kind == "ENTRY" or side == "BUY":
+                    broker.cash -= price * shares + fee
+                elif kind == "EXIT" or side == "SELL":
+                    broker.cash += price * shares - fee
+                elif kind == "SETTLEMENT" or side == "SETTLE":
+                    broker.cash += price * shares - fee
+
+        for row in repo.list_positions(mode="PAPER", limit=1_000_000):
+            if row.status not in {"OPEN", "DUST"} or Decimal(str(row.shares)) <= 0:
+                continue
+            broker.positions[row.asset_id] = PaperPosition(
+                market_id=row.market_id,
+                condition_id=row.condition_id,
+                asset_id=row.asset_id,
+                outcome=Outcome(str(row.outcome).upper()),
+                shares=Decimal(str(row.shares)),
+                avg_price=Decimal(str(row.avg_price)),
+                entry_fee=Decimal(str(row.entry_fee)),
+                cost_basis=Decimal(str(row.cost_basis)),
+                opened_at=row.opened_at,
+            )
+            broker.has_history = True
+        return broker
 
     @property
     def balance(self) -> Decimal:
@@ -188,6 +226,7 @@ class PaperBroker:
                 raw_status="paper_partial" if status is OrderStatus.PARTIAL else "paper_filled",
             )
             self.fills.append(result)
+            self.has_history = True
             return result
 
         # SELL
@@ -230,6 +269,7 @@ class PaperBroker:
             raw_status="paper_sell",
         )
         self.fills.append(result)
+        self.has_history = True
         return result
 
     def settle(self, market: MarketInfo, actual_outcome: str) -> list[PaperSettlement]:

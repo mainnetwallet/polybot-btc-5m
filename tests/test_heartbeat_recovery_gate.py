@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from btc5m_bot.exchange.base import Balance, ExchangeOpenOrder, GeoResult
+from btc5m_bot.exchange.base import Balance, ExchangeOpenOrder, ExchangePosition, GeoResult
 from btc5m_bot.execution.journal import OrderJournal
 from btc5m_bot.gate import LIVE_CONFIRMATION_PHRASE, GateContext, LiveGate
 from btc5m_bot.heartbeat.worker import (
@@ -55,6 +55,26 @@ def test_heartbeat_configuration_requires_every_safety_condition(settings):
     assert not validate_heartbeat_configuration(
         bad_interval, live_mode=True, activation_active=True, dedicated_key_confirmed=True, test_recorded=True
     ).ok
+
+
+def test_heartbeat_keepalive_only_is_allowed_after_one_way_arm(settings):
+    ready = settings.model_copy(
+        update={
+            "heartbeat_enabled": True,
+            "heartbeat_interval_seconds": 5,
+            "heartbeat_lease_seconds": 8,
+            "heartbeat_dedicated_key_confirmed": True,
+        }
+    )
+    check = validate_heartbeat_configuration(
+        ready,
+        live_mode=False,
+        activation_active=False,
+        dedicated_key_confirmed=True,
+        test_recorded=True,
+        keepalive_only=True,
+    )
+    assert check.ok, check.failures
 
 
 def test_lease_must_be_fresh_healthy_and_not_from_the_future(clock, repo):
@@ -202,6 +222,84 @@ def test_recovery_blocks_untracked_exchange_order(clock, repo, adapter):
     result = asyncio.run(RecoveryManager(repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE).run())
     assert result.ready is False
     assert any("untracked working order" in b for b in result.blocks)
+
+
+def test_recovery_adopts_partial_fok_buy_from_exchange_position(clock, repo, adapter):
+    market = make_market()
+    journal = OrderJournal(repo)
+    intent = journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"),
+        limit_price=Decimal("0.50"), order_type="FOK", mode="LIVE",
+    )
+    journal.persist_intent(intent, reserve_amount=Decimal("5.1"))
+    journal.mark_submitting(intent)
+    repo.update_order(
+        intent.client_order_id,
+        status=OrderStatus.PARTIAL.value,
+        exchange_order_id="ex-partial-buy",
+        filled_shares=Decimal("5"),
+        avg_price=Decimal("0.49"),
+        fee_usd=Decimal("0.01"),
+    )
+    adapter.positions = [
+        ExchangePosition(
+            asset_id=intent.asset_id,
+            condition_id=market.condition_id,
+            size=Decimal("5"),
+            avg_price=Decimal("0.49"),
+        )
+    ]
+
+    result = asyncio.run(RecoveryManager(repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE).run())
+    assert result.ready
+    position = repo.get_position(market.market_id, "LIVE")
+    assert position is not None
+    assert position.shares == Decimal("5")
+    assert position.avg_price == Decimal("0.49")
+    assert position.entry_fee == Decimal("0.01")
+    assert repo.active_reserved_total() == 0
+
+
+def test_recovery_blocks_exit_fill_without_trade_level_reconciliation(clock, repo, adapter):
+    market = make_market()
+    repo.create_position(
+        market_id=market.market_id,
+        condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP),
+        outcome="UP",
+        shares=Decimal("10"),
+        avg_price=Decimal("0.50"),
+        entry_fee=Decimal("0.10"),
+        mode="LIVE",
+    )
+    journal = OrderJournal(repo)
+    intent = journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.SELL, shares=Decimal("5"),
+        limit_price=Decimal("0.40"), order_type="FOK", mode="LIVE",
+    )
+    journal.persist_intent(intent, reserve_amount=Decimal(0))
+    journal.mark_submitting(intent)
+    repo.update_order(
+        intent.client_order_id,
+        status=OrderStatus.PARTIAL.value,
+        exchange_order_id="ex-partial-sell",
+        filled_shares=Decimal("5"),
+        avg_price=Decimal("0.40"),
+        fee_usd=Decimal("0.01"),
+    )
+    adapter.positions = [
+        ExchangePosition(
+            asset_id=intent.asset_id,
+            condition_id=market.condition_id,
+            size=Decimal("5"),
+            avg_price=Decimal("0.50"),
+        )
+    ]
+
+    result = asyncio.run(RecoveryManager(repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE).run())
+    assert not result.ready
+    assert any("exit order" in block and "trade-level" in block for block in result.blocks)
+    assert repo.get_position(market.market_id, "LIVE").shares == Decimal("10")
 
 
 def _passing_context(**overrides) -> GateContext:

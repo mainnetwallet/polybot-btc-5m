@@ -78,26 +78,30 @@ def _size_fixed(
     max_price: Decimal | None,
     share_step: Decimal,
     min_notional_usd: Decimal | None,
+    risk_budget: Decimal,
 ) -> SizingResult:
-    """Buy a fixed dollar amount: the smallest share count whose order value is >= ``target``.
+    """Buy a fixed dollar target without exceeding the universal risk or venue limits.
 
-    The order value (shares x price) lands within one share step (~$0.01) above the target, so a
-    $1 setting really sends a $1 order and can satisfy the $1 exchange minimum. Fees and the fee
-    buffer come on top. There is no minimum-capital rule: the amount is whatever the operator set,
-    whatever the capital. The result is never shrunk to fit: if the book or the available balance
-    cannot take the full amount, the trade is refused with a reason instead.
+    The target is never rounded UP to satisfy the venue's minimum share quantity. Worst-case cost
+    (including fees and buffer) must fit both the 2%-of-capital risk budget and available balance.
+    A target below the venue minimum is refused, not upsized.
     """
     best = book.best_ask
     assert best is not None
-    floor_shares = share_step if min_notional_usd is not None else min_order_size
+    floor_shares = min_order_size
 
     def _info(**kw: Decimal) -> dict[str, Decimal]:
-        return dict(risk_budget=target, **kw)
+        return dict(risk_budget=risk_budget, **kw)
 
-    # Start at the share count that certainly reaches the target at the best ask, then walk down
-    # while a smaller count still reaches it (deeper levels cost more per share).
+    # Never round the requested amount up to meet the venue's minimum share quantity.
     shares = ((target / best) / share_step).to_integral_value(rounding="ROUND_CEILING") * share_step
-    shares = max(shares, floor_shares)
+    if shares < floor_shares:
+        return SizingResult(
+            False,
+            ReasonCode.BELOW_MIN_ORDER,
+            f"fixed trade ${target} buys {shares} shares, below the {floor_shares}-share venue minimum",
+            **_info(min_order_cost=floor_shares * best),
+        )
     filled, notional = _walk_limited(book, shares, max_price)
     if filled < shares:
         return SizingResult(
@@ -133,6 +137,13 @@ def _size_fixed(
     avg = notional / shares
     fee = taker_fee(shares, avg, schedule)
     cost = notional + fee + fee_buffer * shares
+    if cost > risk_budget:
+        return SizingResult(
+            False,
+            ReasonCode.RISK_LIMIT,
+            f"fixed trade worst-case cost ${cost:.4f} exceeds the 2% risk budget ${risk_budget:.4f}",
+            **_info(capital_required=cost),
+        )
     if cost > available:
         return SizingResult(
             False,
@@ -150,7 +161,7 @@ def _size_fixed(
         fee=fee,
         worst_case_loss=cost,
         capital_required=cost,
-        risk_budget=target,
+        risk_budget=risk_budget,
         max_by_risk=shares,
         max_by_balance=floor_to_step(available / (best + fee / shares + fee_buffer), share_step),
         max_by_depth=floor_to_step(sum((l.size for l in book.asks if max_price is None or l.price <= max_price), Decimal(0)), share_step),
@@ -176,12 +187,12 @@ def size_position(
 ) -> SizingResult:
     """Size a BUY inside the risk budget.
 
-    ``fixed_notional_usd`` buys a fixed dollar amount per trade (see ``_size_fixed``); the
-    risk-percent budget and the minimum-capital rule do not apply to it.
+    ``fixed_notional_usd`` sets the target amount, but the same risk-percent budget and venue
+    minimums still apply to it.
 
-    ``min_notional_usd`` switches the entry minimum from a share count to a dollar amount
-    (marketable BUYs are denominated in collateral). The size is still never raised to meet it:
-    if the risk budget cannot afford the dollar minimum the result is BELOW_MIN_ORDER.
+    ``min_notional_usd`` adds a collateral-notional floor on top of the venue share minimum.
+    Neither minimum is rounded up to; if either cannot fit inside the risk budget, the order is
+    refused with BELOW_MIN_ORDER.
     """
     if capital is None or capital <= 0:
         return SizingResult(False, ReasonCode.CAPITAL_UNSET, "allocated capital is not configured")
@@ -207,6 +218,7 @@ def size_position(
             max_price=max_price,
             share_step=share_step,
             min_notional_usd=min_notional_usd,
+            risk_budget=risk_budget,
         )
     max_cost = min(risk_budget, available)
 
@@ -223,8 +235,8 @@ def size_position(
     depth_shares = sum((l.size for l in depth_levels), Decimal(0))
     max_by_depth = floor_to_step(depth_shares, share_step)
 
-    # Dollar-minimum mode: the share-count minimum no longer gates entry (only a positive size does).
-    floor_shares = share_step if min_notional_usd is not None else min_order_size
+    # Dollar minimum is an additional constraint; it never replaces the venue share minimum.
+    floor_shares = min_order_size
 
     shares = min(max_by_risk, max_by_balance, max_by_depth)
     if shares < floor_shares:

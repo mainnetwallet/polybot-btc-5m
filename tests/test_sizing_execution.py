@@ -109,11 +109,12 @@ def test_exit_feasibility_requires_full_route_by_default():
     assert "only 10/100" in thin.reasons[-2] or any("only 10" in r for r in thin.reasons)
 
 
-def test_exit_feasibility_has_no_minimum_share_size():
-    # Market SELLs have no 5-share minimum: 1.37 shares is a valid exit.
+def test_exit_feasibility_refuses_unverified_subminimum_market_sell():
+    # Do not assume marketable SELLs are exempt from the CLOB share minimum.
     book = make_book("up", bid="0.40", bid_size="4")
     result = assess_exit_feasibility(book, Decimal("1.37"))
-    assert result.allowed and result.can_full_exit
+    assert not result.allowed
+    assert "below the venue minimum" in result.reasons[0]
     assert assess_exit_feasibility(None, Decimal("10")).allowed is False
 
 
@@ -159,6 +160,39 @@ def test_paper_buy_is_denominated_in_usdc_and_never_partial(clock, repo):
     assert result.status is OrderStatus.FILLED
     assert result.filled_shares == Decimal("1.6129")  # 1 USDC / 0.62, not the 2 planned shares
     assert abs(result.filled_shares * result.avg_price - Decimal("1")) < Decimal("0.001")
+
+
+def test_paper_broker_restores_cash_and_open_position_from_ledger(clock, repo):
+    market = make_market()
+    asset_id = market.asset_id(Outcome.UP)
+    repo.create_position(
+        market_id=market.market_id,
+        condition_id=market.condition_id,
+        asset_id=asset_id,
+        outcome="UP",
+        shares=Decimal("10"),
+        avg_price=Decimal("0.50"),
+        entry_fee=Decimal("0.10"),
+        mode="PAPER",
+    )
+    repo.add_trade(
+        market_id=market.market_id,
+        client_order_id="paper-entry-restore",
+        side="BUY",
+        outcome="UP",
+        price=Decimal("0.50"),
+        shares=Decimal("10"),
+        fee=Decimal("0.10"),
+        kind="ENTRY",
+        mode="PAPER",
+    )
+    broker = PaperBroker.restore_from_repository(Decimal("100"), clock, repo, miss_probability=0)
+    assert broker.balance == Decimal("94.90")
+    restored = broker.position_for(market.market_id)
+    assert restored is not None
+    assert restored.shares == Decimal("10")
+    assert restored.cost_basis == Decimal("5.10")
+    assert broker.has_history
 
 
 def test_paper_broker_sell_and_settlement(clock):
@@ -251,24 +285,17 @@ def test_cancel_is_never_assumed(clock, repo, adapter):
     assert repo.get_order(intent.client_order_id).status == OrderStatus.UNKNOWN.value
 
 
-def test_dollar_minimum_allows_sub_five_share_entry_within_risk():
-    # Capital 100 -> risk budget $2.00. At $0.50 that is ~3.9 shares: below the 5-share limit-order
-    # minimum but well above the $1 marketable-BUY minimum.
+def test_dollar_minimum_does_not_replace_venue_share_minimum():
+    # A collateral floor is not evidence of a sub-five-share CLOB exemption.
     book = make_book("up", bid="0.49", ask="0.50", ask_size="10000")
-    legacy = size_position(
-        capital=Decimal("100"), risk_pct=Decimal("0.02"), balance=Decimal("100"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-    )
-    assert not legacy.allowed and legacy.reason is ReasonCode.BELOW_MIN_ORDER
-    dollars = size_position(
+    result = size_position(
         capital=Decimal("100"), risk_pct=Decimal("0.02"), balance=Decimal("100"),
         book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
         min_notional_usd=Decimal("1.00"),
     )
-    assert dollars.allowed
-    assert dollars.shares < Decimal("5")
-    assert dollars.notional >= Decimal("1.00")
-    assert dollars.worst_case_loss <= Decimal("2.00")  # risk is never exceeded
+    assert not result.allowed
+    assert result.reason is ReasonCode.BELOW_MIN_ORDER
+    assert result.shares == Decimal(0)
 
 
 def test_dollar_minimum_never_raises_risk_to_reach_one_dollar():
@@ -293,7 +320,7 @@ def _fixed(target, *, capital="1000", ask="0.50", ask_size="10000", balance="100
     )
 
 
-@pytest.mark.parametrize("target", ["1", "2", "5", "10"])
+@pytest.mark.parametrize("target", ["3", "5", "10"])
 def test_fixed_size_trades_the_requested_dollar_amount(target):
     result = _fixed(target)
     assert result.allowed, result.detail
@@ -301,19 +328,25 @@ def test_fixed_size_trades_the_requested_dollar_amount(target):
     assert Decimal(target) <= result.notional <= Decimal(target) + Decimal("0.01")
 
 
-def test_fixed_size_ignores_capital_size():
-    small = _fixed("2", capital="200")
-    large = _fixed("2", capital="100000", balance="100000")
+def test_fixed_size_target_is_subject_to_risk_budget():
+    small = _fixed("5", capital="300", balance="300")
+    large = _fixed("5", capital="100000", balance="100000")
     assert small.allowed and large.allowed
     assert small.notional == large.notional
 
+    over_budget = _fixed("5", capital="100", balance="100")
+    assert not over_budget.allowed
+    assert over_budget.reason is ReasonCode.RISK_LIMIT
 
-def test_fixed_size_has_no_minimum_capital():
-    # $5 trade on a $100 capital (5%) and even a $20 capital: allowed, no RISK_LIMIT
-    for capital in ("100", "20"):
-        result = _fixed("5", capital=capital, balance=capital)
-        assert result.allowed, result.detail
-        assert Decimal("5") <= result.notional <= Decimal("5.01")
+
+def test_fixed_size_does_not_round_up_to_venue_minimum_or_bypass_risk():
+    below_minimum = _fixed("1", capital="1000")
+    assert not below_minimum.allowed
+    assert below_minimum.reason is ReasonCode.BELOW_MIN_ORDER
+
+    below_risk_budget = _fixed("5", capital="20", balance="20")
+    assert not below_risk_budget.allowed
+    assert below_risk_budget.reason is ReasonCode.RISK_LIMIT
 
 
 def test_fixed_size_below_exchange_minimum_is_refused():

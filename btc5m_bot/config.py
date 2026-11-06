@@ -102,15 +102,13 @@ class RuntimeConfig(BaseModel):
     taker_delay_ms: int = 250
     fee_buffer: Decimal = Decimal("0.002")
 
-    # Entry minimum expressed in dollars instead of shares. Polymarket marketable (FOK/FAK) BUY
-    # orders are denominated in collateral and have a $1 minimum; the 5-share minimum applies to
-    # resting limit orders. None restores the legacy share-count minimum from market metadata.
+    # Optional additional collateral-notional floor. The venue's share minimum from market/book
+    # metadata always applies as well; this setting never substitutes for it.
     min_order_notional_usd: Decimal | None = Decimal("1.00")
 
-    # Fixed dollar size per trade, default $1. null = size by risk_per_trade_pct (capital x %).
-    # When set, every entry buys about this many dollars of shares (1 -> $1, 2 -> $2) regardless
-    # of capital: no minimum capital is required. The 2%-of-capital cap applies only when this is
-    # null; the daily loss limit, loss streak guard and available balance always apply.
+    # Fixed dollar target per trade, default $1. null = size up to risk_per_trade_pct of capital.
+    # This is only a sizing target: the 2%-of-capital worst-case-loss cap, venue minimum share
+    # quantity, daily loss limit, loss-streak guard and available balance always apply.
     trade_size_usd: Decimal | None = Decimal("1")
 
     # Master trading switch. OFF blocks every NEW entry (TRADING_OFF). Open positions keep being
