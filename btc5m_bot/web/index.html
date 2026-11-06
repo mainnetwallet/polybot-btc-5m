@@ -74,65 +74,72 @@
             <div><h1>Overview</h1><p class="page-sub">Live market, signal and open position.</p></div>
           </div>
 
-          <section id="hero" class="hero" aria-label="Current BTC 5 minute market">
-            <div class="hero-head">
-              <div class="hero-id">
-                <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true">
-                  <rect width="64" height="64" rx="10" fill="#f7931a"/>
-                  <use href="#btc-glyph" x="10" y="10" width="44" height="44"/>
-                </svg>
-                <div class="hero-title">
-                  <h2>BTC Up or Down 5m</h2>
-                  <div class="hero-sub">
-                    <span id="hero-window">Waiting for a market</span>
-                    <span id="hero-info" class="info" tabindex="0" role="img" aria-label="Market question">
-                      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2v.1"/></svg>
-                    </span>
+          <div class="ov">
+            <!-- left: compact market hero, then P&L / decision / market -->
+            <div class="ov-main stack-col">
+              <section id="hero" class="hero" aria-label="Current BTC 5 minute market">
+                <div class="hero-head">
+                  <div class="hero-id">
+                    <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true">
+                      <rect width="64" height="64" rx="10" fill="#f7931a"/>
+                      <use href="#btc-glyph" x="10" y="10" width="44" height="44"/>
+                    </svg>
+                    <div class="hero-title">
+                      <h2>BTC Up or Down 5m</h2>
+                      <div class="hero-sub">
+                        <span id="hero-window">Waiting for a market</span>
+                        <span id="hero-info" class="info" tabindex="0" role="img" aria-label="Market question">
+                          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2v.1"/></svg>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="hero-stats">
+                    <div class="px px-beat">
+                      <div class="px-label">Price To Beat</div>
+                      <div id="px-beat" class="px-val">—</div>
+                    </div>
+                    <div class="px-sep"></div>
+                    <div class="px px-now">
+                      <div class="px-label">Current Price <span id="px-delta" class="px-delta"></span></div>
+                      <div id="px-now" class="px-val">—</div>
+                    </div>
+                  </div>
+
+                  <div id="hero-countdown" class="countdown" role="timer" aria-label="Time left in this window">
+                    <div class="cd"><span id="cd-min">--</span><small>MINS</small></div>
+                    <div class="cd"><span id="cd-sec">--</span><small>SECS</small></div>
                   </div>
                 </div>
-              </div>
 
-              <div class="hero-stats">
-                <div class="px px-beat">
-                  <div class="px-label">Price To Beat</div>
-                  <div id="px-beat" class="px-val">—</div>
+                <div class="hero-chart">
+                  <svg id="hero-svg" role="img" aria-label="Live Chainlink BTC price, last minute"></svg>
+                  <div id="hero-empty" class="hero-empty">Waiting for Chainlink prices…</div>
+                  <span id="hero-src" class="hero-src">Source: Chainlink TWAP</span>
                 </div>
-                <div class="px-sep"></div>
-                <div class="px px-now">
-                  <div class="px-label">Current Price <span id="px-delta" class="px-delta"></span></div>
-                  <div id="px-now" class="px-val">—</div>
+
+                <div class="hero-bottom">
+                  <div id="past-wrap" class="past-wrap">
+                    <button id="past-btn" type="button" class="hpill" aria-expanded="false" aria-controls="past-pop">
+                      <span>Past</span>
+                      <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                      <span class="hdiv"></span>
+                      <span id="past-dots" class="past-dots"></span>
+                    </button>
+                    <div id="past-pop" class="past-pop hidden" role="dialog" aria-label="Settled windows"></div>
+                  </div>
+                  <div id="hero-wins" class="wins"></div>
                 </div>
-              </div>
+              </section>
 
-              <div id="hero-countdown" class="countdown" role="timer" aria-label="Time left in this window">
-                <div class="cd"><span id="cd-min">--</span><small>MINS</small></div>
-                <div class="cd"><span id="cd-sec">--</span><small>SECS</small></div>
-              </div>
-            </div>
-
-            <div class="hero-chart">
-              <svg id="hero-svg" role="img" aria-label="Live Chainlink BTC price, last minute"></svg>
-              <div id="hero-empty" class="hero-empty">Waiting for Chainlink prices…</div>
-              <span id="hero-src" class="hero-src">Source: Chainlink TWAP</span>
-            </div>
-
-            <div class="hero-bottom">
-              <div id="past-wrap" class="past-wrap">
-                <button id="past-btn" type="button" class="hpill" aria-expanded="false" aria-controls="past-pop">
-                  <span>Past</span>
-                  <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-                  <span class="hdiv"></span>
-                  <span id="past-dots" class="past-dots"></span>
-                </button>
-                <div id="past-pop" class="past-pop hidden" role="dialog" aria-label="Settled windows"></div>
-              </div>
-              <div id="hero-wins" class="wins"></div>
-            </div>
-          </section>
-
-          <div class="dash">
-            <div class="c4 stack-col">
               <section class="card"><h2>Profit / Loss</h2><div id="pnl" class="pnl"></div></section>
+              <section class="card"><h2>Last decision</h2><div id="decision" class="decision">no decisions yet</div></section>
+              <section class="card"><h2>Market</h2><div class="kv" id="market"></div></section>
+            </div>
+
+            <!-- right: what the bot is doing right now -->
+            <aside class="ov-side stack-col" aria-label="Signal, position and order books">
               <section class="card signal">
                 <h2>Signal</h2>
                 <div class="prob">
@@ -144,16 +151,10 @@
                   <div class="kv" id="signal"></div>
                 </div>
               </section>
-            </div>
-            <div class="c4 stack-col">
               <section class="card"><h2>Position</h2><div class="kv" id="position"></div></section>
-              <section class="card"><h2>Last decision</h2><div id="decision" class="decision">no decisions yet</div></section>
-              <section class="card"><h2>Feeds</h2><div id="feeds" class="feeds"></div></section>
-            </div>
-            <div class="c4 stack-col">
-              <section class="card"><h2>Market</h2><div class="kv" id="market"></div></section>
               <section class="card"><h2>Order books</h2><div id="books" class="books"></div></section>
-            </div>
+              <section class="card"><h2>Feeds</h2><div id="feeds" class="feeds"></div></section>
+            </aside>
           </div>
         </section>
 

@@ -164,8 +164,8 @@ input[type="checkbox"] { width: auto; height: auto; accent-color: var(--accent);
 .warn-card > h2 { background: rgba(240, 178, 63, .07); color: var(--warn); border-bottom-color: rgba(240, 178, 63, .25); }
 
 /* layout helpers */
-.dash { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; align-items: start; }
-.c4 { grid-column: span 4; }
+/* Overview: compact market hero + stats on the left, live signal / position / books on the right */
+.ov { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .stack-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .form-stack { display: grid; gap: 12px; }
@@ -334,15 +334,18 @@ td.empty { padding: 28px 14px; text-align: center; color: var(--muted); border-b
 .hero h2 { font-size: 17px; font-weight: 700; line-height: 1.25; letter-spacing: -.005em; }
 .hero svg { display: block; }
 
-.hero-head { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 32px; }
-.hero-id { display: flex; align-items: center; gap: 12px; flex: 1 1 280px; min-width: 0; }
+.hero-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 20px;
+  grid-template-areas: "id cd" "stats stats";
+}
+.hero-id { grid-area: id; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .hero-icon { flex: none; width: 40px; height: 40px; color: #fff; }
 .hero-title { min-width: 0; }
 .hero-sub { display: flex; align-items: center; gap: 8px; margin-top: 1px; color: var(--h-muted); font-size: 13px; }
 .info { display: inline-flex; cursor: help; border-radius: 50%; }
 .info svg { width: 14px; height: 14px; fill: none; stroke: var(--h-muted); stroke-width: 1.3; stroke-linecap: round; }
 
-.hero-stats { display: flex; align-items: center; gap: 20px; }
+.hero-stats { grid-area: stats; display: flex; align-items: center; gap: 22px; padding: 9px 14px; background: var(--surface-2); border-radius: var(--radius-sm); }
 .px-label { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.3; color: var(--h-muted); }
 .px-val { font-size: 22px; font-weight: 700; line-height: 1.2; letter-spacing: -.01em; }
 .px-beat .px-val { color: #b4b9c5; }
@@ -352,14 +355,14 @@ td.empty { padding: 28px 14px; text-align: center; color: var(--muted); border-b
 .hero .px-delta.up { color: var(--h-green); }
 .hero .px-delta.down { color: var(--h-red); }
 
-.countdown { display: flex; gap: 14px; }
+.countdown { grid-area: cd; display: flex; gap: 14px; }
 .cd { display: grid; justify-items: center; line-height: 1; }
 .cd span { font-size: 24px; font-weight: 700; line-height: 1; color: var(--h-text); }
 .cd small { margin-top: 4px; font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--h-muted); }
 .countdown.hot .cd span { color: var(--h-red); }
 .countdown.hot .cd small { color: #b8575b; }
 
-.hero-chart { position: relative; height: 240px; margin-top: 12px; }
+.hero-chart { position: relative; height: 200px; margin-top: 12px; }
 #hero-svg { width: 100%; height: 100%; touch-action: pan-y; }
 /* When there is no data hero.js adds .hidden. Keep the box laid out (just invisible) so its size is
    still measured; with display:none the size drops to 0 and the chart could never come back. */
@@ -421,10 +424,8 @@ td.empty { padding: 28px 14px; text-align: center; color: var(--muted); border-b
 .past-empty { padding: 12px; color: var(--h-muted); font-size: 13px; }
 
 /* -------------------------------------------------------------- responsive */
-@media (max-width: 1280px) {
-  .c4 { grid-column: span 6; }
-  /* two columns: the third column drops below and lays its cards side by side */
-  .dash > .stack-col:nth-child(3) { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+@media (max-width: 1180px) {
+  .ov { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 1000px) {
   .split { grid-template-columns: 1fr; }
@@ -442,11 +443,8 @@ td.empty { padding: 28px 14px; text-align: center; color: var(--muted); border-b
   .status-line { padding: 6px 14px; }
   .alert-row { padding: 8px 14px; }
   .content { padding: 16px 14px 48px; }
-  .dash { grid-template-columns: 1fr; }
-  .c4 { grid-column: auto; }
-  .dash > .stack-col:nth-child(3) { display: flex; }
   .hero { padding: 14px 12px; }
-  .hero-chart { height: 200px; }
+  .hero-chart { height: 180px; }
   .hero-stats { gap: 16px; }
   .px-val { font-size: 19px; }
   .cd span { font-size: 20px; }
