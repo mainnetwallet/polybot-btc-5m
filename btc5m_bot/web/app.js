@@ -759,10 +759,8 @@ if (clearBtn) {
     const active = document.querySelector(".tab.active");
     const tab = active ? active.dataset.tab : "decisions";
     if (!CLEAR_NOTES[tab]) return;
-    const phrase = prompt("This deletes " + CLEAR_NOTES[tab] + ".\nType CLEAR to confirm.");
-    if (phrase === null) return;
     try {
-      const r = await post("/api/activity/clear", { action: tab, phrase });
+      const r = await post("/api/activity/clear", { action: tab });
       report("cleared " + r.removed + " " + tab + " row(s)");
       loadTab(tab);
     } catch (err) { report("clear failed: " + err.message); }

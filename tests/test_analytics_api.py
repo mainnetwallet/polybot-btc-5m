@@ -335,18 +335,15 @@ def test_state_store_version_changes_on_every_update():
     assert v0 < v1 < store.version
 
 
-def test_activity_clear_requires_phrase_and_clears_decisions(client, repo):
+def test_activity_clear_deletes_on_click_without_typed_phrase(client, repo):
     test_client, _, _ = client
     repo.log_decision(market_id="m1", decision="NO_TRADE", reason_code="CAPITAL_UNSET")
     headers = login(test_client)
 
-    bad = test_client.post("/api/activity/clear", json={"action": "decisions", "phrase": "no"}, headers=headers)
-    assert bad.status_code == 400
+    unknown = test_client.post("/api/activity/clear", json={"action": "risk"}, headers=headers)
+    assert unknown.status_code == 400
     assert len(repo.recent_decisions(10)) == 1
 
-    unknown = test_client.post("/api/activity/clear", json={"action": "risk", "phrase": "CLEAR"}, headers=headers)
-    assert unknown.status_code == 400
-
-    ok = test_client.post("/api/activity/clear", json={"action": "decisions", "phrase": "CLEAR"}, headers=headers)
+    ok = test_client.post("/api/activity/clear", json={"action": "decisions"}, headers=headers)
     assert ok.status_code == 200 and ok.json()["removed"] == 1
     assert repo.recent_decisions(10) == []

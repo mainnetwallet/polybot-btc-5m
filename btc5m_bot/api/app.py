@@ -74,7 +74,6 @@ PHRASES = {
     "reset_day": "RESET DAY",
     "approve_rule": "APPROVE RULE",
     "revoke_live": "REVOKE LIVE",
-    "clear_activity": "CLEAR",
 }
 
 
@@ -373,8 +372,6 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
     async def clear_activity(
         body: PhraseBody, request: Request, session: Session = Depends(_csrf)
     ) -> dict[str, Any]:
-        if body.phrase.strip() != PHRASES["clear_activity"]:
-            raise HTTPException(status_code=400, detail="typed confirmation must be 'CLEAR'")
         if body.action not in {"decisions", "orders", "positions", "trades"}:
             raise HTTPException(status_code=400, detail="unknown activity tab")
         removed = await asyncio.to_thread(repo.clear_activity, body.action)
