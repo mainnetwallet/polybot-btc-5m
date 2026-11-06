@@ -364,8 +364,11 @@ class RecoveryManager:
         delta_shares = max(Decimal(0), total_shares - prior_shares)
         delta_gross = total_gross - prior_gross
         delta_fee = max(Decimal(0), total_fee - prior_fee)
-        if delta_shares > 0 and position is None:
-            blocks.append(f"SELL order {row.client_order_id} remaining exchange position is unavailable")
+        if any(f.shares <= 0 or f.price <= 0 or f.price >= 1 for f in fills):
+            blocks.append(f"SELL order {row.client_order_id} contains invalid fill quantities or prices")
+            return False
+        if delta_gross < 0 or delta_fee < 0:
+            blocks.append(f"SELL order {row.client_order_id} cumulative fills/fees moved backwards")
             return False
         local_position = self.repo.get_position(row.market_id, self.mode.value)
         if local_position is None or local_position.shares <= 0:
