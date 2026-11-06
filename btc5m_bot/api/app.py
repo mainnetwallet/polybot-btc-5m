@@ -72,6 +72,7 @@ PHRASES = {
     "reset_day": "RESET DAY",
     "approve_rule": "APPROVE RULE",
     "revoke_live": "REVOKE LIVE",
+    "clear_activity": "CLEAR",
 }
 
 
@@ -365,6 +366,23 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
             engine.risk.reset_day_lock, actor=_actor(request, session), reason=body.reason or "operator"
         )
         return {"ok": True}
+
+    @app.post("/api/activity/clear")
+    async def clear_activity(
+        body: PhraseBody, request: Request, session: Session = Depends(_csrf)
+    ) -> dict[str, Any]:
+        if body.phrase.strip() != PHRASES["clear_activity"]:
+            raise HTTPException(status_code=400, detail="typed confirmation must be 'CLEAR'")
+        if body.action not in {"decisions", "orders", "positions", "trades"}:
+            raise HTTPException(status_code=400, detail="unknown activity tab")
+        removed = await asyncio.to_thread(repo.clear_activity, body.action)
+        await asyncio.to_thread(
+            repo.audit,
+            "ACTIVITY_CLEARED",
+            actor=_actor(request, session),
+            detail={"tab": body.action, "rows": removed},
+        )
+        return {"ok": True, "tab": body.action, "removed": removed}
 
     @app.post("/api/rules/approve")
     async def approve_rule(

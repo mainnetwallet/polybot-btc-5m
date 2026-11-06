@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -427,6 +427,27 @@ class Repository:
             stmt = stmt.where(DecisionLogRow.market_id == market_id)
         with session_scope(self._sf) as s:
             return list(s.scalars(stmt))
+
+    def clear_activity(self, kind: str) -> int:
+        """Delete history shown on the dashboard Activity page. Returns the rows removed.
+
+        Only inert history is removed: decision logs, and PAPER orders / positions / trades that
+        are finished. Open or in-flight rows and everything recorded in LIVE mode are kept.
+        """
+        if kind == "decisions":
+            stmt = delete(DecisionLogRow)
+        elif kind == "orders":
+            terminal = ["FILLED", "CANCELLED", "REJECTED"]
+            stmt = delete(OrderRow).where(OrderRow.mode == "PAPER", OrderRow.status.in_(terminal))
+        elif kind == "positions":
+            done = ["CLOSED", "SETTLED", "REDEEMED"]
+            stmt = delete(PositionRow).where(PositionRow.mode == "PAPER", PositionRow.status.in_(done))
+        elif kind == "trades":
+            stmt = delete(TradeRow).where(TradeRow.mode == "PAPER")
+        else:
+            raise ValueError(f"unknown activity kind: {kind}")
+        with session_scope(self._sf) as s:
+            return int(s.execute(stmt).rowcount or 0)
 
     # ------------------------------------------------------------------ latency
     def add_latency(self, kind: str, ms: int, market_id: str | None = None) -> None:
