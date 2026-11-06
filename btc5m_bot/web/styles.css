@@ -367,3 +367,14 @@ td.empty { padding: 20px 12px; color: var(--muted); border-bottom: 0; }
 .ddetail { font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dfeat summary { cursor: pointer; font-size: 11px; color: var(--muted); }
 .dfeat-grid { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin-top: 6px; font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
+
+/* ---- last decision card ---- */
+.dcard { display: grid; gap: 8px; font-size: 13px; line-height: 1.5; }
+.dc-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.dc-line { font-size: 15px; font-weight: 600; }
+.side { font: 700 12px/1 var(--mono); padding: 3px 7px; border-radius: 3px; background: var(--line); }
+.side.up { color: var(--up); }
+.side.down { color: var(--down); }
+.dc-row, .dc-why, .dc-pos { overflow-wrap: anywhere; }
+.dc-pos { padding-top: 8px; border-top: 1px solid var(--line); }
+.dc-time { font: 11px/1.4 var(--mono); }

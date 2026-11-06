@@ -244,7 +244,7 @@ function renderState(s, serverTime) {
   renderBooks(s.books);
   renderPosition(s.position);
   renderRisk(s.risk);
-  renderDecision(s.last_decision);
+  renderDecision(s.last_decision, s.position);
   renderAlert(s.risk, s.market);
   renderGate(s.live && s.live.gate);
   renderAnalytics(s.analytics);
@@ -445,14 +445,94 @@ function renderRisk(risk) {
   ]);
 }
 
-function renderDecision(d) {
-  if (!d) { $("decision").textContent = "no decisions yet"; return; }
-  const parts = [
-    "[" + text(d.ts) + "] " + text(d.decision) + " · " + text(d.reason),
-    text(d.detail),
-  ];
-  if (d.extra) parts.push(JSON.stringify(d.extra));
-  $("decision").textContent = parts.join("\n");
+function fmtUsdt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) + " USDT" : "—";
+}
+
+function sideTag(parent, outcome) {
+  const o = String(outcome || "").toUpperCase();
+  parent.appendChild(el("span", "side " + (o === "UP" ? "up" : o === "DOWN" ? "down" : ""), o || "—"));
+}
+
+function renderDecision(d, position) {
+  const box = $("decision");
+  clear(box);
+  box.classList.remove("decision");
+  box.classList.add("dcard");
+  if (!d) { box.textContent = "no decisions yet"; return; }
+  const x = d.extra || {};
+  const kind = String(d.decision || "").toUpperCase();
+
+  // Headline: one plain sentence with side + USDT.
+  const head = el("div", "dc-head");
+  const badge = el("span", "dbadge tone-" + decisionTone(kind), kind.replace("_", " "));
+  head.appendChild(badge);
+  const line = el("span", "dc-line");
+  if (kind === "TRADE") {
+    line.appendChild(document.createTextNode("Bought "));
+    sideTag(line, x.outcome);
+    line.appendChild(document.createTextNode(" · " + text(x.shares) + " shares @ " + text(x.price) + " = " + fmtUsdt(x.usdt)));
+  } else if (kind === "EXIT") {
+    line.appendChild(document.createTextNode("Sold "));
+    sideTag(line, x.outcome);
+    line.appendChild(document.createTextNode(" · " + text(x.shares) + " shares @ " + text(x.price) + " = " + fmtUsdt(x.usdt)));
+  } else if (kind === "SETTLE") {
+    line.appendChild(document.createTextNode("Window ended: "));
+    sideTag(line, x.outcome);
+    line.appendChild(document.createTextNode(x.won ? " WON" : " LOST"));
+  } else if (kind === "HOLD") {
+    line.appendChild(document.createTextNode("Holding position, not selling yet"));
+  } else {
+    line.appendChild(document.createTextNode("No new trade"));
+  }
+  head.appendChild(line);
+  box.appendChild(head);
+
+  // Result numbers for exits and settlements.
+  if ((kind === "EXIT" || kind === "SETTLE") && !isEmpty(x.pnl)) {
+    const pnl = Number(x.pnl);
+    const r = el("div", "dc-row");
+    r.appendChild(el("span", "muted", "Result"));
+    r.appendChild(el("span", pnl >= 0 ? "up" : "down", (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT"));
+    box.appendChild(r);
+  }
+
+  // Why, in plain words.
+  const why = kind === "TRADE" || kind === "EXIT" || kind === "SETTLE" ? null : text(d.detail, "");
+  if (why) {
+    const r = el("div", "dc-why");
+    r.appendChild(el("span", "muted", "Why "));
+    r.appendChild(document.createTextNode(kind === "NO_TRADE" ? why : why));
+    box.appendChild(r);
+  }
+  if (kind === "EXIT" && x.rule) {
+    const r = el("div", "dc-why");
+    r.appendChild(el("span", "muted", "Rule "));
+    r.appendChild(document.createTextNode(String(x.rule).replace(/_/g, " ").toLowerCase()));
+    box.appendChild(r);
+  }
+
+  // What is held right now (always shown while a position is open).
+  const pos = el("div", "dc-pos");
+  if (position && position.shares) {
+    pos.appendChild(el("span", "muted", "Holding now "));
+    sideTag(pos, position.outcome);
+    const roi = position.roi !== null && position.roi !== undefined ? Number(position.roi) : null;
+    pos.appendChild(document.createTextNode(
+      " · " + text(position.shares) + " shares · cost " + fmtUsdt(position.cost_basis)
+    ));
+    if (roi !== null && Number.isFinite(roi)) {
+      pos.appendChild(document.createTextNode(" · ROI "));
+      pos.appendChild(el("span", roi >= 0 ? "up" : "down", (roi >= 0 ? "+" : "") + (roi * 100).toFixed(2) + "%"));
+    }
+  } else {
+    pos.appendChild(el("span", "muted", "Holding now "));
+    pos.appendChild(document.createTextNode("nothing (flat)"));
+  }
+  box.appendChild(pos);
+
+  box.appendChild(el("div", "dc-time muted", text(d.ts, "").replace("T", " ").slice(0, 19)));
 }
 
 function renderGate(gate) {

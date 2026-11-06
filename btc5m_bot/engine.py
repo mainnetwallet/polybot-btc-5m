@@ -941,6 +941,12 @@ class BotEngine:
                 probability=p.p_up,
                 edge=edge.net_edge,
                 price=result.avg_price,
+                extra={
+                    "outcome": outcome.value,
+                    "shares": str(result.filled_shares),
+                    "price": str(result.avg_price),
+                    "usdt": str((result.filled_shares * result.avg_price).quantize(Decimal("0.01"))),
+                },
             )
             self.repo.add_protection_event(
                 "ENTRY_FILLED",
@@ -1069,6 +1075,14 @@ class BotEngine:
                 f"SELL {decision.shares}@{outcome_result.result.avg_price} reason={decision.reason} pnl={outcome_result.realized_pnl}",
                 probability=self._probability.p_up if self._probability else None,
                 price=outcome_result.result.avg_price,
+                extra={
+                    "outcome": position.outcome,
+                    "shares": str(outcome_result.result.filled_shares),
+                    "price": str(outcome_result.result.avg_price),
+                    "usdt": str((outcome_result.result.filled_shares * outcome_result.result.avg_price).quantize(Decimal("0.01"))),
+                    "pnl": str(outcome_result.realized_pnl),
+                    "rule": decision.reason,
+                },
             )
         else:
             self.repo.add_protection_event(
@@ -1234,6 +1248,13 @@ class BotEngine:
                 f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized}"
                 + (" (PAPER, oracle-simulated outcome; on-chain resolution pending)" if provisional else ""),
                 price=Decimal(1) if position.outcome.upper() == actual.upper() else Decimal(0),
+                extra={
+                    "outcome": position.outcome,
+                    "result": actual.upper(),
+                    "won": position.outcome.upper() == actual.upper(),
+                    "shares": str(position.shares),
+                    "pnl": str(realized),
+                },
             )
             self.exits.forget(position.id)
         machine.settle(now)
