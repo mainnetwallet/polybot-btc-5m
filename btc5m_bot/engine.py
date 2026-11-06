@@ -185,6 +185,7 @@ class BotEngine:
         self._twap_cursor: datetime | None = None
         self._feature_record_at = 0.0
         self._last_backup = 0.0
+        self._last_exit_state_save = float("-inf")
         self._last_analytics = 0.0
         self._gate_report = None
         self._clock_sync_ok = False
@@ -273,6 +274,7 @@ class BotEngine:
                     self._gate_report = None
                 self._refresh_mode()
             self.recovery.mode = self._effective_mode
+            self._restore_exit_state()
             await self._start_feed_tasks()
             if self.start_api:
                 await self._start_api()
@@ -355,6 +357,7 @@ class BotEngine:
             self._refresh_intel(market, now)
         await self._record_data(now)
         await self._manage_position(now)
+        self._persist_exit_state()
         await self._evaluate_entry(now)
         await self._settle_windows(now)
         await self._maybe_redeem()
@@ -371,6 +374,7 @@ class BotEngine:
 
     async def _shutdown(self) -> None:
         self._running = False
+        self._persist_exit_state(force=True)
         self.lease.invalidate("engine shutting down", engine_pid=os.getpid())
         self.state.update(engine_healthy=False, detail="stopping")
         ticker = getattr(self, "_ticker_task", None)
@@ -1425,6 +1429,44 @@ class BotEngine:
             resolution_confirmed=True,
             settlement_ts=now,
         )
+
+    # ------------------------------------------------------- exit-manager memory
+    EXIT_STATE_KEY = "exit_manager_state"
+    EXIT_STATE_SAVE_SECONDS = 5.0
+
+    def _restore_exit_state(self) -> None:
+        """Reload trailing-stop peaks / depth / spread baselines saved before the last restart.
+
+        Without this a restart resets every open position's high-water mark to the current price,
+        so a trailing stop would silently stop protecting gains made before the restart.
+        """
+        try:
+            saved = self.repo.get_state(self.EXIT_STATE_KEY, {})
+            if not saved:
+                return
+            open_ids = {
+                int(row.id)
+                for row in self.repo.list_positions(limit=100_000)
+                if row.status in {"OPEN", "DUST"}
+            }
+            restored = self.exits.load_state(saved, keep_position_ids=open_ids)
+            if restored:
+                log.info("restored exit-manager state for %d tracked value(s)", restored)
+        except Exception as exc:  # noqa: BLE001 - never block startup on this
+            log.error("could not restore exit-manager state: %s", exc)
+
+    def _persist_exit_state(self, *, force: bool = False) -> None:
+        if not self.exits.dirty and not force:
+            return
+        mono = self.clock.monotonic()
+        if not force and mono - self._last_exit_state_save < self.EXIT_STATE_SAVE_SECONDS:
+            return
+        try:
+            self.repo.set_state(self.EXIT_STATE_KEY, self.exits.export_state())
+            self._last_exit_state_save = mono
+        except Exception as exc:  # noqa: BLE001 - a database blip must not stop trading management
+            self.exits.dirty = True  # retry on the next iteration
+            log.warning("could not persist exit-manager state: %s", exc)
 
     # -------------------------------------------------------------------- risk
     async def _maybe_backup(self, *, force: bool = False) -> None:

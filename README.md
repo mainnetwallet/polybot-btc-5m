@@ -260,7 +260,8 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
 Supabase) and paste its connection URL into the Render variable `POLYBOT_DATABASE_URL`
 (`DATABASE_URL` also works; the old name `POLYBOT_SETTINGS_DATABASE_URL` is still read). The bot then
 keeps **all** of its state in that one database: Settings, orders, positions, paper trades, approved
-resolution rules, risk state, exposure reservations and the audit log. Every save on the Settings page is
+resolution rules, risk state, exposure reservations, the audit log and the exit manager's memory (trailing-stop
+peaks and depth/spread baselines of open positions, so a restart cannot reset a trailing stop). Every save on the Settings page is
 committed to the database first and loaded again on every start, so capital, trade size, limits, strategy,
 feature switches and the trading ON/OFF switch survive restarts, redeploys and spin-downs. If the database
 cannot be written the save is rejected with an error instead of silently reverting later. The Settings

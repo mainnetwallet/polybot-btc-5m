@@ -51,6 +51,44 @@ class HybridExitManager:
         self._peak_bid: dict[str, Decimal] = {}
         self._depth_peak: dict[str, Decimal] = {}
         self._spread_floor: dict[str, Decimal] = {}
+        # True when the tracked values changed since the last export_state(); the engine uses it to
+        # persist them, so a restart cannot reset a trailing stop's high-water mark.
+        self.dirty = False
+
+    # --------------------------------------------------------------- persistence
+    def export_state(self) -> dict[str, dict[str, str]]:
+        """JSON-safe snapshot of the per-position peaks and baselines (Decimals as exact text)."""
+        self.dirty = False
+        return {
+            "peak_bid": {k: format(v, "f") for k, v in self._peak_bid.items()},
+            "depth_peak": {k: format(v, "f") for k, v in self._depth_peak.items()},
+            "spread_floor": {k: format(v, "f") for k, v in self._spread_floor.items()},
+        }
+
+    def load_state(self, data: dict[str, Any] | None, *, keep_position_ids: set[int] | None = None) -> int:
+        """Restore a snapshot from export_state(). Entries of positions not in keep_position_ids
+        (closed or settled while the bot was down) are dropped. Returns the entries restored."""
+        restored = 0
+        for attr, name in (("_peak_bid", "peak_bid"), ("_depth_peak", "depth_peak"), ("_spread_floor", "spread_floor")):
+            store: dict[str, Decimal] = getattr(self, attr)
+            store.clear()
+            raw = (data or {}).get(name) or {}
+            if not isinstance(raw, dict):
+                continue
+            for key, value in raw.items():
+                try:
+                    position_id = int(str(key).split(":", 1)[0])
+                    amount = Decimal(str(value))
+                except Exception:  # noqa: BLE001 - a corrupt entry must never stop the engine
+                    continue
+                if not amount.is_finite():
+                    continue
+                if keep_position_ids is not None and position_id not in keep_position_ids:
+                    continue
+                store[str(key)] = amount
+                restored += 1
+        self.dirty = False
+        return restored
 
     # ------------------------------------------------------------------ utils
     def _book_for(self, position: PositionRow, up_book: OrderBookSnapshot | None, down_book: OrderBookSnapshot | None) -> OrderBookSnapshot | None:
@@ -154,6 +192,8 @@ class HybridExitManager:
         basis = position.cost_basis if position.cost_basis > 0 else position.shares * position.avg_price
         roi = (mark_value - basis) / basis if basis > 0 else None
         peak = max(self._peak_bid.get(key, mark), mark)
+        if self._peak_bid.get(key) != peak:
+            self.dirty = True
         self._peak_bid[key] = peak
         trailing_armed = peak > position.avg_price
 
@@ -205,11 +245,16 @@ class HybridExitManager:
             (level.size for level in book.asks[:5]), Decimal(0)
         )
         peak_depth = max(self._depth_peak.get(key, Decimal(0)), depth_now)
+        if self._depth_peak.get(key) != peak_depth:
+            self.dirty = True
         self._depth_peak[key] = peak_depth
         spread_now = book.spread
         if spread_now is not None and spread_now > 0:
             floor = self._spread_floor.get(key)
-            self._spread_floor[key] = spread_now if floor is None else min(floor, spread_now)
+            new_floor = spread_now if floor is None else min(floor, spread_now)
+            if floor != new_floor:
+                self.dirty = True
+            self._spread_floor[key] = new_floor
         spread_floor = self._spread_floor.get(key)
 
         # 1. Emergency: protection state, oracle loss, stale book, recovery failure.
@@ -436,3 +481,4 @@ class HybridExitManager:
         for store in (self._peak_bid, self._depth_peak, self._spread_floor):
             for key in [k for k in store if k.startswith(prefix)]:
                 store.pop(key, None)
+                self.dirty = True
