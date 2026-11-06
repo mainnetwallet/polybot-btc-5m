@@ -291,7 +291,7 @@
               <button id="trading-toggle" type="button" class="btn">…</button>
             </section>
 
-            <form id="settings-form" class="settings-form" autocomplete="off">
+            <form id="settings-form" class="settings-form" autocomplete="off" novalidate>
               <section class="card group" role="group" aria-labelledby="g-capital">
                 <h2 id="g-capital">Capital and risk</h2>
                 <div class="fields">
@@ -332,6 +332,12 @@
               <section class="card group" role="group" aria-labelledby="g-advanced">
                 <h2 id="g-advanced">Advanced</h2>
                 <div class="fields" id="cfg-advanced"></div>
+              </section>
+
+              <section class="card group" role="group" aria-labelledby="g-features">
+                <h2 id="g-features">Experimental features</h2>
+                <p class="muted small">OFF = disabled, SHADOW = computed and logged but never acts, ACTIVE = acts on trades.</p>
+                <div class="fields" id="cfg-features"></div>
               </section>
 
               <div class="savebar">

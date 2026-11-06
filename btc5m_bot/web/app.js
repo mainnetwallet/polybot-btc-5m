@@ -933,33 +933,44 @@ async function loadTab(name) {
       ], rows);
     } else if (name === "settings") {
       const r = await api("/api/config");
-      const c = r.config;
-      renderTradingSwitch(!!c.trading_enabled);
-      $("cfg-capital").value = text(c.capital_usd, "");
-      $("cfg-capfrombal").checked = !!c.capital_from_balance;
-      $("cfg-tradesize").value = text(c.trade_size_usd, "");
-      $("cfg-risk").value = (Number(c.risk_per_trade_pct) * 100).toFixed(2);
-      $("cfg-daily").value = text(c.daily_loss_limit_usd, "");
-      $("cfg-prob").value = c.min_probability;
-      $("cfg-edge").value = c.min_net_edge;
-      $("cfg-spread").value = c.max_spread;
-      $("cfg-tp").value = c.take_profit_roi;
-      $("cfg-dyntp").checked = !!c.dynamic_take_profit;
-      $("cfg-dyntpmin").value = c.dynamic_tp_min_multiple;
-      $("cfg-dyntpmax").value = c.dynamic_tp_max_multiple;
-      $("cfg-sl").value = c.stop_loss_roi;
-      $("cfg-momz").value = c.momentum_reversal_z;
-      $("cfg-minhold").value = c.min_hold_seconds_before_reversal;
-      $("cfg-liqdrop").value = (Number(c.liquidity_exit_depth_drop_pct) * 100).toFixed(0);
-      $("cfg-liqspread").value = c.liquidity_exit_spread_multiple;
-      $("cfg-strategy").value = c.strategy;
-      $("cfg-rules").checked = !!c.require_rules_approval;
-      loadAdvancedFields(c);
+      fillSettingsForm(r.config);
       setSettingsMsg("", "muted");
     }
   } catch (err) {
     report("tab load failed: " + err.message);
   }
+}
+
+/* Fractions are shown as percentages. Exact, trimmed conversion: no silent rounding of a stored
+   value (0.625 must show 62.5, not 63) and no float noise (0.07 must not show 7.000000000000001). */
+function fractionToPct(v) { return String(+(Number(v) * 100).toFixed(4)); }
+function pctToFraction(v) { return (Number(v) / 100).toFixed(6); }
+
+/* Fill every Settings control from a config object. Used on page load and again after a save, so
+   the form always shows what the server actually stored. */
+function fillSettingsForm(c) {
+  renderTradingSwitch(!!c.trading_enabled);
+  $("cfg-capital").value = text(c.capital_usd, "");
+  $("cfg-capfrombal").checked = !!c.capital_from_balance;
+  $("cfg-tradesize").value = text(c.trade_size_usd, "");
+  $("cfg-risk").value = fractionToPct(c.risk_per_trade_pct);
+  $("cfg-daily").value = text(c.daily_loss_limit_usd, "");
+  $("cfg-prob").value = c.min_probability;
+  $("cfg-edge").value = c.min_net_edge;
+  $("cfg-spread").value = c.max_spread;
+  $("cfg-tp").value = c.take_profit_roi;
+  $("cfg-dyntp").checked = !!c.dynamic_take_profit;
+  $("cfg-dyntpmin").value = c.dynamic_tp_min_multiple;
+  $("cfg-dyntpmax").value = c.dynamic_tp_max_multiple;
+  $("cfg-sl").value = c.stop_loss_roi;
+  $("cfg-momz").value = c.momentum_reversal_z;
+  $("cfg-minhold").value = c.min_hold_seconds_before_reversal;
+  $("cfg-liqdrop").value = fractionToPct(c.liquidity_exit_depth_drop_pct);
+  $("cfg-liqspread").value = c.liquidity_exit_spread_multiple;
+  $("cfg-strategy").value = c.strategy;
+  $("cfg-rules").checked = !!c.require_rules_approval;
+  loadAdvancedFields(c);
+  loadFeatureFields(c);
 }
 
 function renderTradingSwitch(on) {
@@ -1046,7 +1057,7 @@ function loadAdvancedFields(c) {
   }
 }
 
-function collectAdvancedFields(patch) {
+function collectAdvancedFields(patch, skipped) {
   for (const f of ADV_FIELDS) {
     const input = $("adv-" + f.key);
     if (!input) continue;
@@ -1054,41 +1065,113 @@ function collectAdvancedFields(patch) {
     else if (f.kind === "select") patch[f.key] = input.value;
     else {
       const v = input.value.trim();
-      if (v === "") { if (f.nullable) patch[f.key] = null; }
-      else patch[f.key] = v;
+      if (v === "") {
+        if (f.nullable) patch[f.key] = null;
+        else skipped.push(f.label.replace(/\s*\(.*\)\s*$/, ""));
+      } else patch[f.key] = v;
     }
   }
 }
 
+/* Experimental feature switches (config.feature_modes). Built from the stored dict, so a flag that
+   exists in the config is always editable here even if this list does not name it. The save sends
+   the whole dict because the server replaces it, it does not merge it. */
+const FEATURE_LABELS = {
+  trailing_stop: "Trailing stop",
+  partial_exits: "Partial exits",
+  correlation_shadow: "Correlation shadow",
+  ml_model: "ML model",
+  feed_failover: "Feed failover",
+};
+let featureBase = {};
+
+function loadFeatureFields(c) {
+  const box = $("cfg-features");
+  if (!box) return;
+  featureBase = Object.assign({}, c.feature_modes || {});
+  box.textContent = "";
+  const keys = Object.keys(FEATURE_LABELS).concat(Object.keys(featureBase).filter((k) => !(k in FEATURE_LABELS)));
+  for (const key of keys) {
+    const label = document.createElement("label");
+    label.className = "field";
+    const select = document.createElement("select");
+    select.id = "feat-" + key;
+    select.dataset.key = key;
+    for (const o of ["OFF", "SHADOW", "ACTIVE"]) {
+      const opt = document.createElement("option");
+      opt.value = o;
+      opt.textContent = o;
+      select.appendChild(opt);
+    }
+    select.value = featureBase[key] || "OFF";
+    label.appendChild(el("span", "lbl", FEATURE_LABELS[key] || key));
+    label.appendChild(select);
+    box.appendChild(label);
+  }
+}
+
+function collectFeatureFields(patch) {
+  const box = $("cfg-features");
+  if (!box || !box.children.length) return;
+  const modes = Object.assign({}, featureBase);
+  box.querySelectorAll("select").forEach((s) => { modes[s.dataset.key] = s.value; });
+  patch.feature_modes = modes;
+}
+
 $("settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const patch = {
-    risk_per_trade_pct: (Number($("cfg-risk").value) / 100).toFixed(4),
-    daily_loss_limit_usd: Number($("cfg-daily").value).toFixed(2),
-    min_probability: $("cfg-prob").value,
-    min_net_edge: $("cfg-edge").value,
-    max_spread: $("cfg-spread").value,
-    take_profit_roi: $("cfg-tp").value,
-    dynamic_take_profit: $("cfg-dyntp").checked,
-    dynamic_tp_min_multiple: $("cfg-dyntpmin").value,
-    dynamic_tp_max_multiple: $("cfg-dyntpmax").value,
-    stop_loss_roi: $("cfg-sl").value,
-    momentum_reversal_z: $("cfg-momz").value,
-    min_hold_seconds_before_reversal: $("cfg-minhold").value,
-    liquidity_exit_depth_drop_pct: (Number($("cfg-liqdrop").value) / 100).toFixed(4),
-    liquidity_exit_spread_multiple: $("cfg-liqspread").value,
-    strategy: $("cfg-strategy").value,
-    require_rules_approval: $("cfg-rules").checked,
-  };
+  const patch = {};
+  const skipped = [];   // blank required boxes: left unchanged instead of sending 0 and failing the whole save
+  const bad = [];
+
+  // [config key, input id, label, converter to the stored unit]
+  const required = [
+    ["risk_per_trade_pct", "cfg-risk", "Risk per trade", pctToFraction],
+    ["daily_loss_limit_usd", "cfg-daily", "Daily loss limit", (v) => v],
+    ["min_probability", "cfg-prob", "Minimum probability", (v) => v],
+    ["min_net_edge", "cfg-edge", "Minimum net edge", (v) => v],
+    ["max_spread", "cfg-spread", "Maximum spread", (v) => v],
+    ["take_profit_roi", "cfg-tp", "Take profit", (v) => v],
+    ["dynamic_tp_min_multiple", "cfg-dyntpmin", "Dynamic TP min multiple", (v) => v],
+    ["dynamic_tp_max_multiple", "cfg-dyntpmax", "Dynamic TP max multiple", (v) => v],
+    ["stop_loss_roi", "cfg-sl", "Stop loss", (v) => v],
+    ["momentum_reversal_z", "cfg-momz", "Momentum reversal", (v) => v],
+    ["min_hold_seconds_before_reversal", "cfg-minhold", "Minimum hold", (v) => v],
+    ["liquidity_exit_depth_drop_pct", "cfg-liqdrop", "Liquidity depth drop", pctToFraction],
+    ["liquidity_exit_spread_multiple", "cfg-liqspread", "Liquidity spread multiple", (v) => v],
+  ];
+  for (const [key, id, label, conv] of required) {
+    const raw = $(id).value.trim();
+    if (raw === "") { skipped.push(label); continue; }
+    if (!Number.isFinite(Number(raw))) { bad.push(label); continue; }
+    patch[key] = conv(raw);
+  }
+  if (bad.length) {
+    const msg = "Not a number: " + bad.join(", ");
+    setSettingsMsg(msg, "err");
+    report("save failed: " + msg);
+    return;
+  }
+
+  patch.dynamic_take_profit = $("cfg-dyntp").checked;
+  patch.strategy = $("cfg-strategy").value;
+  patch.require_rules_approval = $("cfg-rules").checked;
   patch.capital_from_balance = $("cfg-capfrombal").checked;
   const capital = $("cfg-capital").value.trim();
   patch.capital_usd = capital === "" ? null : capital;
   const tradeSize = $("cfg-tradesize").value.trim();
   patch.trade_size_usd = tradeSize === "" ? null : tradeSize;
-  collectAdvancedFields(patch);
+  collectAdvancedFields(patch, skipped);
+  collectFeatureFields(patch);
+
   try {
-    await post("/api/config", { patch });
-    setSettingsMsg("Saved", "saved");
+    const r = await post("/api/config", { patch });
+    fillSettingsForm(r.config);   // show what the server really stored (normalised / clamped values)
+    if (skipped.length) {
+      setSettingsMsg("Saved. Left unchanged (empty): " + skipped.join(", "), "saved");
+    } else {
+      setSettingsMsg("Saved", "saved");
+    }
     report("configuration saved");
   } catch (err) {
     setSettingsMsg(err.message, "err");

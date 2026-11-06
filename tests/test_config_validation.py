@@ -87,3 +87,20 @@ def test_config_example_json_validates_and_is_complete():
 
 def test_every_writable_key_is_a_real_field():
     assert CONFIG_WRITABLE <= set(RuntimeConfig.model_fields)
+
+
+def test_every_writable_key_is_editable_on_the_settings_page():
+    # A key the API accepts but the Settings page never sends is a setting nobody can change from
+    # the dashboard. Keep the two lists from drifting apart.
+    js = (ROOT / "btc5m_bot" / "web" / "app.js").read_text(encoding="utf-8")
+    missing = sorted(key for key in CONFIG_WRITABLE if key not in js)
+    assert not missing, f"writable but not on the Settings page: {missing}"
+
+
+def test_settings_form_does_not_block_save_with_native_validation():
+    # Browser step/min/max validation silently cancels submit for values the server would accept
+    # or explain; the server's range checks are the source of truth.
+    html = (ROOT / "btc5m_bot" / "web" / "index.html").read_text(encoding="utf-8")
+    form_tag = html[html.index('<form id="settings-form"'):].split(">", 1)[0]
+    assert "novalidate" in form_tag
+    assert 'id="cfg-features"' in html
