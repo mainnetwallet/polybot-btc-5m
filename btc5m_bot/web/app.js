@@ -395,13 +395,18 @@ function renderBooks(books) {
 
 function renderPosition(p) {
   if (!p) { kv($("position"), [["status", "flat"]]); return; }
+  const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+  const usdc = (v) => (n(v) === null ? "—" : n(v).toFixed(2) + " USDC");
+  const pnl = n(p.unrealized_pnl);
+  const roi = n(p.roi);
   kv($("position"), [
-    ["outcome", p.outcome, p.outcome === "UP" ? "up" : "down"],
+    ["side", p.outcome, p.outcome === "UP" ? "up" : "down"],
+    ["invested", usdc(p.cost_basis)],
+    ["entry price", p.avg_price],
+    ["price now", p.mark],
     ["shares", p.shares],
-    ["avg price", p.avg_price],
-    ["cost basis", p.cost_basis],
-    ["mark", p.mark],
-    ["ROI", p.roi !== null ? (Number(p.roi) * 100).toFixed(2) + "%" : "—", Number(p.roi) >= 0 ? "up" : "down"],
+    ["value now", usdc(p.value_now)],
+    ["P&L", pnl === null ? "—" : (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDC" + (roi === null ? "" : " (" + (roi >= 0 ? "+" : "") + (roi * 100).toFixed(1) + "%)"), pnl !== null && pnl >= 0 ? "up" : "down"],
     ["status", p.status, p.status === "DUST" ? "warn" : ""],
     ["market", p.market_id],
   ]);
@@ -468,7 +473,7 @@ function renderPnl(s) {
   const closed = wins + losses + (perf ? perf.flats : 0);
 
   const top = el("div", "pnl-total");
-  top.appendChild(el("span", "pnl-big " + cls(total), signed(total) + " USDT"));
+  top.appendChild(el("span", "pnl-big " + cls(total), signed(total) + " USDC"));
   top.appendChild(el("span", "muted small", "total now (" + mode.toUpperCase() + ")"));
   box.appendChild(top);
 
@@ -490,7 +495,7 @@ function renderPnl(s) {
 
 function fmtUsdt(v) {
   const n = Number(v);
-  return Number.isFinite(n) ? n.toFixed(2) + " USDT" : "—";
+  return Number.isFinite(n) ? n.toFixed(2) + " USDC" : "—";
 }
 
 function sideTag(parent, outcome) {
@@ -507,7 +512,7 @@ function renderDecision(d, position) {
   const x = d.extra || {};
   const kind = String(d.decision || "").toUpperCase();
 
-  // Headline: one plain sentence with side + USDT.
+  // Headline: one plain sentence with side + USDC.
   const head = el("div", "dc-head");
   const badge = el("span", "dbadge tone-" + decisionTone(kind), kind.replace("_", " "));
   head.appendChild(badge);
@@ -515,11 +520,11 @@ function renderDecision(d, position) {
   if (kind === "TRADE") {
     line.appendChild(document.createTextNode("Bought "));
     sideTag(line, x.outcome);
-    line.appendChild(document.createTextNode(" · " + text(x.shares) + " shares @ " + text(x.price) + " = " + fmtUsdt(x.usdt)));
+    line.appendChild(document.createTextNode(" for " + fmtUsdt(x.usdt) + " · " + text(x.shares) + " shares @ " + text(x.price)));
   } else if (kind === "EXIT") {
     line.appendChild(document.createTextNode("Sold "));
     sideTag(line, x.outcome);
-    line.appendChild(document.createTextNode(" · " + text(x.shares) + " shares @ " + text(x.price) + " = " + fmtUsdt(x.usdt)));
+    line.appendChild(document.createTextNode(" for " + fmtUsdt(x.usdt) + " · " + text(x.shares) + " shares @ " + text(x.price)));
   } else if (kind === "SETTLE") {
     line.appendChild(document.createTextNode("Window ended: "));
     sideTag(line, x.outcome);
@@ -537,7 +542,7 @@ function renderDecision(d, position) {
     const pnl = Number(x.pnl);
     const r = el("div", "dc-row");
     r.appendChild(el("span", "muted", "Result"));
-    r.appendChild(el("span", pnl >= 0 ? "up" : "down", (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDT"));
+    r.appendChild(el("span", pnl >= 0 ? "up" : "down", (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDC"));
     box.appendChild(r);
   }
 

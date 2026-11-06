@@ -138,6 +138,33 @@ def test_adapter_place_order_returns_real_fill(settings, repo):
     assert "shares" not in call
 
 
+def test_adapter_buy_sends_the_exact_usdc_amount_when_set(settings, repo):
+    market = make_market()
+    journal = OrderJournal(repo)
+    intent = journal.new_intent(
+        market=market,
+        outcome=Outcome.UP,
+        side=Side.BUY,
+        shares=Decimal("10"),
+        limit_price=Decimal("0.51"),
+        order_type="FOK",
+        mode="LIVE",
+        usdc_amount=Decimal("5"),
+    )
+    stub = _StubSecure(_accepted("matched", "9.8", "5"))
+    adapter = _adapter_with(settings, stub)
+    try:
+        asyncio.run(adapter.place_order(intent, market))
+    finally:
+        asyncio.run(adapter.close())
+
+    call = stub.calls[0]
+    # The order is sized in USDC (5.00), not shares x the max price (5.10).
+    assert call["amount"] == Decimal("5")
+    assert call["max_spend"] == Decimal("5") + taker_fee(Decimal("10"), Decimal("0.51"), SCHEDULE)
+    assert "shares" not in call
+
+
 def test_adapter_sell_uses_shares_and_min_price(settings, repo):
     market = make_market()
     journal = OrderJournal(repo)

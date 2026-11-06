@@ -385,6 +385,9 @@ class OrderIntent:
     strategy_version: str = "BOT_BASELINE"
     created_at: datetime = field(default_factory=utcnow)
     reason: str = ""
+    # BUY size in collateral (USDC). When set, the exchange order is denominated in this amount and
+    # the share count is whatever it buys; ``shares`` is only the planning estimate.
+    usdc_amount: Decimal | None = None
 
 
 @dataclass

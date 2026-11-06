@@ -27,6 +27,7 @@ class OrderJournal:
         strategy_version: str = "BOT_BASELINE",
         reason: str = "",
         now: datetime | None = None,
+        usdc_amount: Decimal | None = None,
     ) -> OrderIntent:
         client_order_id = uuid.uuid4().hex
         material = f"{market.market_id}:{side.value}:{outcome.value}:{shares}:{limit_price}:{order_type}"
@@ -45,6 +46,7 @@ class OrderJournal:
             strategy_version=strategy_version,
             created_at=now or utcnow(),
             reason=reason,
+            usdc_amount=usdc_amount,
         )
 
     def persist_intent(self, intent: OrderIntent, *, reserve_amount: Decimal) -> None:

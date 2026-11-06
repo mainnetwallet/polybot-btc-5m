@@ -928,6 +928,7 @@ class BotEngine:
             mode=self._effective_mode.value,
             reason=f"{cfg.strategy}|p={p_outcome:.4f}|edge={edge.net_edge}",
             now=now,
+            usdc_amount=cfg.trade_size_usd if cfg.trade_size_usd is not None else sizing.notional,
         )
         outcome_result = await self.execution.execute_entry(intent, market, book, signal_ts=f.ts)
         result = outcome_result.result
@@ -937,7 +938,7 @@ class BotEngine:
                 now,
                 "TRADE",
                 ReasonCode.OK,
-                f"BUY {outcome.value} {result.filled_shares}@{result.avg_price} ({result.status.value})",
+                f"BUY {outcome.value} for {(result.filled_shares * result.avg_price):.2f} USDC = {result.filled_shares} shares @ {result.avg_price} ({result.status.value})",
                 probability=p.p_up,
                 edge=edge.net_edge,
                 price=result.avg_price,
@@ -1073,7 +1074,7 @@ class BotEngine:
                 now,
                 "EXIT",
                 ReasonCode.OK,
-                f"SELL {decision.shares}@{outcome_result.result.avg_price} reason={decision.reason} pnl={outcome_result.realized_pnl}",
+                f"SELL {position.outcome} {outcome_result.result.filled_shares} shares @ {outcome_result.result.avg_price} = {(outcome_result.result.filled_shares * outcome_result.result.avg_price):.2f} USDC reason={decision.reason} pnl={outcome_result.realized_pnl} USDC",
                 probability=self._probability.p_up if self._probability else None,
                 price=outcome_result.result.avg_price,
                 extra={
@@ -1408,6 +1409,7 @@ class BotEngine:
                 "mark": _dec(mark),
                 "roi": _dec((mark * position.shares - position.cost_basis) / position.cost_basis) if mark and position.cost_basis else None,
                 "unrealized_pnl": _dec(mark * position.shares - position.cost_basis) if mark is not None else None,
+                "value_now": _dec(mark * position.shares) if mark is not None else None,
             }
         feeds = self._feeds_payload(now, self._composite)
         books = {}
