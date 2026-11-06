@@ -427,7 +427,7 @@ def probability_estimate(p_up: float, *, expected: Outcome = Outcome.UP) -> Prob
     )
 
 
-def test_dynamic_take_profit_lets_a_strong_favourite_run():
+def test_dynamic_take_profit_never_raises_target_above_base_for_a_strong_favourite():
     exits = HybridExitManager()
     market = make_market()
     book = make_book(market.asset_id(Outcome.UP), bid="0.61", bid_size="100")
@@ -436,8 +436,10 @@ def test_dynamic_take_profit_lets_a_strong_favourite_run():
         up_book=book, down_book=None, probability=probability_estimate(0.80), config=config(),
         now=START, remaining_seconds=120,
     )
-    assert decision.action is ExitAction.HOLD
-    assert decision.metadata["take_profit_target"] == Decimal("0.30")
+    # +22% ROI with a strong favourite must sell: the target stays at the base 20%.
+    assert decision.action is ExitAction.SELL
+    assert decision.reason == "TAKE_PROFIT"
+    assert decision.metadata["take_profit_target"] == Decimal("0.20")
 
 
 def test_dynamic_take_profit_locks_a_weak_edge_earlier():

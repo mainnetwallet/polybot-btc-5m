@@ -165,11 +165,13 @@ class HybridExitManager:
         if remaining_seconds is None:
             remaining_seconds = (as_utc(market.end_date) - now).total_seconds()
 
-        # Dynamic TP: let a strong favourite run and lock a weak edge earlier.
+        # Dynamic TP: lock a weak edge earlier. The target is never raised above take_profit_roi:
+        # a position at or past the configured target must sell (a strong favourite used to push
+        # the target up to 1.5x, so a +20-25% profit was held and often given back).
         take_profit_target = config.take_profit_roi
         if config.dynamic_take_profit and p_own is not None:
             if p_own >= 0.75:
-                multiple = config.dynamic_tp_max_multiple
+                multiple = Decimal(1)
             elif p_own < 0.55:
                 multiple = config.dynamic_tp_min_multiple
             else:
