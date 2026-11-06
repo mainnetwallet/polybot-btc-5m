@@ -938,7 +938,7 @@ class BotEngine:
                 now,
                 "TRADE",
                 ReasonCode.OK,
-                f"BUY {outcome.value} for {(result.filled_shares * result.avg_price):.2f} USDC = {result.filled_shares} shares @ {result.avg_price} ({result.status.value})",
+                f"BUY {outcome.value} for {(result.filled_shares * result.avg_price):.2f} USDC = {result.filled_shares} shares @ {result.avg_price:.4f} ({result.status.value})",
                 probability=p.p_up,
                 edge=edge.net_edge,
                 price=result.avg_price,
@@ -1074,7 +1074,7 @@ class BotEngine:
                 now,
                 "EXIT",
                 ReasonCode.OK,
-                f"SELL {position.outcome} {outcome_result.result.filled_shares} shares @ {outcome_result.result.avg_price} = {(outcome_result.result.filled_shares * outcome_result.result.avg_price):.2f} USDC reason={decision.reason} pnl={outcome_result.realized_pnl} USDC",
+                f"SELL {position.outcome} {outcome_result.result.filled_shares} shares @ {outcome_result.result.avg_price:.4f} = {(outcome_result.result.filled_shares * outcome_result.result.avg_price):.2f} USDC reason={decision.reason} pnl={outcome_result.realized_pnl:.4f} USDC",
                 probability=self._probability.p_up if self._probability else None,
                 price=outcome_result.result.avg_price,
                 extra={
@@ -1248,7 +1248,7 @@ class BotEngine:
                 now,
                 "SETTLE",
                 ReasonCode.OK,
-                f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized}"
+                f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized:.4f}"
                 + (" (PAPER, oracle-simulated outcome; on-chain resolution pending)" if provisional else ""),
                 price=Decimal(1) if position.outcome.upper() == actual.upper() else Decimal(0),
                 extra={
