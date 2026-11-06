@@ -251,6 +251,17 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
   free web services in the workspace, and one always-on service uses about 730 of them. When the
   hours run out, every free web service in the workspace is suspended until the next month.
 
+**Do not set capital and rules by hand after every restart.** Set these environment variables once
+in the Render dashboard (Environment); they are re-applied at every start:
+
+| Variable | Effect |
+|---|---|
+| `POLYBOT_DEFAULT_CAPITAL_USD` | allocated capital, used while `runtime.json` has none |
+| `POLYBOT_AUTO_APPROVE_RULES=true` | approves every resolution rule automatically, **PAPER mode only** (never in LIVE) |
+| `POLYBOT_APPROVED_RULE_FINGERPRINTS` | comma separated fingerprints approved in any mode (use this for LIVE) |
+
+Auto-approvals are written to the audit log as `env-auto-approve`.
+
 To operate the bot for real, switch to a paid plan with a disk: in `render.yaml` set
 `plan: starter`, uncomment the `disk` block and point the three `POLYBOT_*_DIR` variables at
 `/var/data/...`. Render Shell then works, so run `python -m btc5m_bot status`,

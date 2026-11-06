@@ -1,0 +1,2 @@
+[console_scripts]
+polybot = btc5m_bot.cli:main

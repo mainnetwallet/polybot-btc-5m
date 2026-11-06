@@ -365,6 +365,20 @@ class BotEngine:
         self.execution.mode_provider = lambda: self._effective_mode
 
     # --------------------------------------------------------------- discovery
+
+    def _maybe_auto_approve_rule(self, fingerprint: str, cfg: Any) -> Any:
+        """Approve a rule from env settings so approvals survive restarts on ephemeral disks."""
+        pinned = fingerprint.lower() in self.settings.pinned_rule_fingerprints
+        auto = self.settings.auto_approve_rules and cfg.mode.value != "LIVE"
+        if not (pinned or auto):
+            return None
+        self.repo.approve_resolution_rule(fingerprint, "env-auto-approve")
+        self.repo.audit(
+            "RESOLUTION_RULE_APPROVED",
+            actor="env-auto-approve",
+            detail={"fingerprint": fingerprint, "via": "pinned" if pinned else "auto_paper"},
+        )
+        return self.repo.get_resolution_rule(fingerprint)
     async def _maybe_discover(self, now: datetime) -> None:
         mono = self.clock.monotonic()
         if mono - self._last_discovery < DISCOVERY_SECONDS and self._machines:
@@ -390,6 +404,8 @@ class BotEngine:
                 spec = build_rule_spec(raw_market, info.event_start, info.version.value)
                 self.repo.upsert_resolution_rule(spec.to_db())
                 rule = self.repo.get_resolution_rule(spec.fingerprint)
+                if rule is not None and not rule.approved:
+                    rule = self._maybe_auto_approve_rule(spec.fingerprint, cfg) or rule
                 if rule is not None and cfg.require_rules_approval and not rule.approved:
                     self.repo.set_state(
                         "pending_rule",
@@ -1676,6 +1692,13 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
     init_db(db_engine)
     repo = Repository(make_session_factory(db_engine))
     config_store = ConfigStore(settings.runtime_config_file)
+    if settings.default_capital_usd is not None and config_store.snapshot().capital_usd is None:
+        config_store.set_capital(settings.default_capital_usd)
+        repo.audit(
+            "CAPITAL_DEFAULT_APPLIED",
+            actor="env",
+            detail={"capital_usd": str(settings.default_capital_usd)},
+        )
     clock = RealClock()
     adapter = PolymarketAdapter(settings)
     from .data.btc_feeds import feed_from_name

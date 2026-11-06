@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from btc5m_bot.clock import FixedClock
 from btc5m_bot.data.series import BtcSeries, BtcTick
+from btc5m_bot.config import Settings
 from btc5m_bot.engine import BotEngine
 from btc5m_bot.execution.journal import OrderJournal
 from btc5m_bot.execution.paper import PaperBroker
@@ -320,3 +321,57 @@ def test_unfunded_paper_broker_is_funded_when_capital_is_set_later(settings, rep
 
     assert engine.paper.cash == Decimal("200")
     assert engine._balance == Decimal("200")
+
+
+def test_auto_approve_rules_env_approves_in_paper(settings, repo, adapter, config_store):
+    settings.auto_approve_rules = True
+    clock = FixedClock(START)
+    engine, _, spec = _build(settings, repo, adapter, config_store, clock)
+
+    asyncio.run(engine._iteration())
+
+    rule = repo.get_resolution_rule(spec.fingerprint)
+    assert rule is not None and rule.approved
+    assert rule.approved_by == "env-auto-approve"
+
+
+def test_auto_approve_rules_env_never_applies_in_live(settings, repo, adapter, config_store):
+    settings.auto_approve_rules = True
+    clock = FixedClock(START)
+    engine, _, spec = _build(settings, repo, adapter, config_store, clock)
+    config_store.update({"mode": "LIVE"})
+
+    asyncio.run(engine._iteration())
+
+    rule = repo.get_resolution_rule(spec.fingerprint)
+    assert rule is not None and not rule.approved
+
+
+def test_pinned_fingerprint_is_approved_without_auto_flag(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, _, spec = _build(settings, repo, adapter, config_store, clock)
+    settings.approved_rule_fingerprints = spec.fingerprint.upper()
+
+    asyncio.run(engine._iteration())
+
+    rule = repo.get_resolution_rule(spec.fingerprint)
+    assert rule is not None and rule.approved
+
+
+def test_default_capital_env_applied_on_boot(tmp_path, monkeypatch):
+    from btc5m_bot.engine import build_default_engine
+
+    monkeypatch.setenv("POLYBOT_DEFAULT_CAPITAL_USD", "500")
+    s = Settings(
+        project_root=tmp_path,
+        data_dir=tmp_path / "data",
+        logs_dir=tmp_path / "logs",
+        config_dir=tmp_path / "config",
+        default_capital_usd=Decimal("500"),
+    )
+    s.ensure_dirs()
+    engine, db_engine = build_default_engine(s, start_api=False)
+    try:
+        assert engine.config_store.snapshot().capital_usd == Decimal("500")
+    finally:
+        db_engine.dispose()

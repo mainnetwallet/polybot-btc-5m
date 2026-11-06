@@ -309,6 +309,23 @@ class Settings(BaseSettings):
     clob_api_secret: SecretStr | None = None
     clob_api_passphrase: SecretStr | None = None
 
+    # Persistent defaults. On hosts without a persistent disk (Render free) runtime.json and the
+    # database are wiped on every restart, so capital and rule approvals would have to be set
+    # again by hand. These values are re-applied on every start instead.
+    # POLYBOT_DEFAULT_CAPITAL_USD: used only while runtime.json has no capital_usd.
+    default_capital_usd: Decimal | None = Field(default=None, gt=0)
+    # POLYBOT_APPROVED_RULE_FINGERPRINTS: comma separated fingerprints that are approved as soon
+    # as they are seen, in any mode.
+    approved_rule_fingerprints: str | None = None
+    # POLYBOT_AUTO_APPROVE_RULES=true: approve every resolution rule automatically, PAPER mode
+    # only. It is never applied while the effective mode is LIVE.
+    auto_approve_rules: bool = False
+
+    @property
+    def pinned_rule_fingerprints(self) -> set[str]:
+        raw = self.approved_rule_fingerprints or ""
+        return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
     binance_ws: str = "wss://stream.binance.com:9443/ws/btcusdt@trade"
     coinbase_ws: str = "wss://ws-feed.exchange.coinbase.com"
 
