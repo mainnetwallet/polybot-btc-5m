@@ -14,277 +14,338 @@
         <path d="M12 8.5v15M12 8.5h7.6a3.6 3.6 0 0 1 0 7.2H12M12 15.7h8.6a3.9 3.9 0 0 1 0 7.8H12M14.5 5.5v3M18.5 5.5v3M14.5 23.5v3M18.5 23.5v3"/>
       </g>
     </symbol>
+    <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+    <symbol id="i-analytics" viewBox="0 0 24 24"><path d="M4 20V11M10 20V5M16 20v-6M2 20h20"/></symbol>
+    <symbol id="i-risk" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-rules" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="m9.5 15 2 2 3.5-4"/></symbol>
+    <symbol id="i-golive" viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
   </svg>
 
   <div id="login" class="login-wrap">
     <form id="login-form" class="login-card" autocomplete="off">
       <div class="brand"><span class="dot"></span> Polybot</div>
       <p class="muted lede">Sign in to the operator console on this machine.</p>
-      <label>Username<input id="login-user" type="text" autocomplete="username" required></label>
-      <label>Password<input id="login-pass" type="password" autocomplete="current-password" required></label>
-      <button type="submit" class="btn primary">Sign in</button>
+      <label class="field"><span class="lbl">Username</span><input id="login-user" type="text" autocomplete="username" required></label>
+      <label class="field"><span class="lbl">Password</span><input id="login-pass" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="btn primary block">Sign in</button>
       <p id="login-error" class="error" role="alert"></p>
     </form>
   </div>
 
-  <div id="app" class="hidden">
-    <header class="topbar">
-      <div class="brand"><span class="dot"></span> Polybot</div>
-      <div class="badges">
-        <span id="badge-mode" class="badge">PAPER</span>
-        <span id="badge-health" class="badge">UNKNOWN</span>
-        <span id="badge-live" class="badge">LIVE LOCKED</span>
-        <span id="badge-uptime" class="badge ghost">0s</span>
-      </div>
-      <div class="spacer"></div>
-      <span id="server-time" class="muted small"></span>
-      <button id="logout" class="btn ghost small">Sign out</button>
-    </header>
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="dot"></span> Polybot <small>operator console</small></div>
+      <nav class="nav" aria-label="Pages">
+        <span class="nav-label">Monitor</span>
+        <a class="nav-link active" href="#overview" data-page="overview"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-overview"/></svg><span>Overview</span></a>
+        <a class="nav-link" href="#activity" data-page="activity"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-activity"/></svg><span>Activity</span></a>
+        <a class="nav-link" href="#analytics" data-page="analytics"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-analytics"/></svg><span>Analytics</span></a>
+        <span class="nav-label">Operate</span>
+        <a class="nav-link" href="#risk" data-page="risk"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-risk"/></svg><span>Risk</span></a>
+        <a class="nav-link" href="#rules" data-page="rules"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-rules"/></svg><span>Rules</span></a>
+        <a class="nav-link" href="#golive" data-page="golive"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-golive"/></svg><span>Go live</span></a>
+        <a class="nav-link" href="#settings" data-page="settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span></a>
+      </nav>
+    </aside>
 
-    <div id="status-line" class="status-line">initialising…</div>
-    <div id="alert" class="alert hidden" role="status"></div>
+    <div class="main">
+      <header class="topbar">
+        <div class="badges">
+          <span id="badge-mode" class="badge">PAPER</span>
+          <span id="badge-health" class="badge">UNKNOWN</span>
+          <span id="badge-live" class="badge">LIVE LOCKED</span>
+          <span id="badge-uptime" class="badge ghost">0s</span>
+        </div>
+        <div class="spacer"></div>
+        <span id="server-time" class="muted small mono"></span>
+        <button id="logout" class="btn ghost small">Sign out</button>
+      </header>
 
-    <div class="shell">
-    <nav class="nav" aria-label="Pages">
-      <a class="nav-link active" href="#overview" data-page="overview">Overview</a>
-      <a class="nav-link" href="#risk" data-page="risk">Risk</a>
-      <a class="nav-link" href="#golive" data-page="golive">Go live</a>
-      <a class="nav-link" href="#activity" data-page="activity">Activity</a>
-      <a class="nav-link" href="#analytics" data-page="analytics">Analytics</a>
-      <a class="nav-link" href="#rules" data-page="rules">Rules</a>
-      <a class="nav-link" href="#settings" data-page="settings">Settings</a>
-    </nav>
-    <main class="content">
+      <div id="status-line" class="status-line">initialising…</div>
+      <div id="alert" class="alert hidden" role="status"></div>
 
-      <section id="page-overview" class="page grid">
-        <h1>Overview</h1>
+      <main class="content">
 
-        <section id="hero" class="hero" aria-label="Current BTC 5 minute market">
-          <div class="hero-top">
-            <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true">
-              <rect width="64" height="64" rx="8" fill="#f7931a"/>
-              <use href="#btc-glyph" x="10" y="10" width="44" height="44"/>
-            </svg>
-            <div class="hero-title">
-              <h2>BTC Up or Down 5m</h2>
-              <div class="hero-sub">
-                <span id="hero-window">Waiting for a market</span>
-                <span id="hero-info" class="info" tabindex="0" role="img" aria-label="Market question">
-                  <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2v.1"/></svg>
-                </span>
+        <!-- ================= Overview ================= -->
+        <section id="page-overview" class="page">
+          <div class="page-head">
+            <div><h1>Overview</h1><p class="page-sub">Live market, signal and open position.</p></div>
+          </div>
+
+          <section id="hero" class="hero" aria-label="Current BTC 5 minute market">
+            <div class="hero-head">
+              <div class="hero-id">
+                <svg class="hero-icon" viewBox="0 0 64 64" aria-hidden="true">
+                  <rect width="64" height="64" rx="10" fill="#f7931a"/>
+                  <use href="#btc-glyph" x="10" y="10" width="44" height="44"/>
+                </svg>
+                <div class="hero-title">
+                  <h2>BTC Up or Down 5m</h2>
+                  <div class="hero-sub">
+                    <span id="hero-window">Waiting for a market</span>
+                    <span id="hero-info" class="info" tabindex="0" role="img" aria-label="Market question">
+                      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5.2v.1"/></svg>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="hero-stats">
+                <div class="px px-beat">
+                  <div class="px-label">Price To Beat</div>
+                  <div id="px-beat" class="px-val">—</div>
+                </div>
+                <div class="px-sep"></div>
+                <div class="px px-now">
+                  <div class="px-label">Current Price <span id="px-delta" class="px-delta"></span></div>
+                  <div id="px-now" class="px-val">—</div>
+                </div>
+              </div>
+
+              <div id="hero-countdown" class="countdown" role="timer" aria-label="Time left in this window">
+                <div class="cd"><span id="cd-min">--</span><small>MINS</small></div>
+                <div class="cd"><span id="cd-sec">--</span><small>SECS</small></div>
               </div>
             </div>
-            <div class="hero-tools" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>
-              <svg viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>
-              <svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-4.5L6 20z"/></svg>
-            </div>
-          </div>
 
-          <div class="hero-stats">
-            <div class="px px-beat">
-              <div class="px-label">Price To Beat</div>
-              <div id="px-beat" class="px-val">—</div>
+            <div class="hero-chart">
+              <svg id="hero-svg" role="img" aria-label="Live Chainlink BTC price, last minute"></svg>
+              <div id="hero-empty" class="hero-empty">Waiting for Chainlink prices…</div>
+              <span id="hero-src" class="hero-src">Source: Chainlink TWAP</span>
             </div>
-            <div class="px-sep"></div>
-            <div class="px px-now">
-              <div class="px-label">Current Price <span id="px-delta" class="px-delta"></span></div>
-              <div id="px-now" class="px-val">—</div>
-            </div>
-            <div class="spacer"></div>
-            <div id="hero-countdown" class="countdown" role="timer" aria-label="Time left in this window">
-              <div class="cd"><span id="cd-min">--</span><small>MINS</small></div>
-              <div class="cd"><span id="cd-sec">--</span><small>SECS</small></div>
-            </div>
-          </div>
 
-          <div class="hero-chart">
-            <svg id="hero-svg" role="img" aria-label="Live Chainlink BTC price, last minute"></svg>
-            <div id="hero-empty" class="hero-empty">Waiting for Chainlink prices…</div>
-            <span id="hero-src" class="hero-src">Source: Chainlink TWAP</span>
-          </div>
-
-          <div class="hero-bottom">
-            <div id="past-wrap" class="past-wrap">
-              <button id="past-btn" type="button" class="hpill" aria-expanded="false" aria-controls="past-pop">
-                <span>Past</span>
-                <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
-                <span class="hdiv"></span>
-                <span id="past-dots" class="past-dots"></span>
-              </button>
-              <div id="past-pop" class="past-pop hidden" role="dialog" aria-label="Settled windows"></div>
+            <div class="hero-bottom">
+              <div id="past-wrap" class="past-wrap">
+                <button id="past-btn" type="button" class="hpill" aria-expanded="false" aria-controls="past-pop">
+                  <span>Past</span>
+                  <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                  <span class="hdiv"></span>
+                  <span id="past-dots" class="past-dots"></span>
+                </button>
+                <div id="past-pop" class="past-pop hidden" role="dialog" aria-label="Settled windows"></div>
+              </div>
+              <div id="hero-wins" class="wins"></div>
             </div>
-            <div id="hero-wins" class="wins"></div>
-            <span class="hpill more" aria-hidden="true">More
-              <svg class="chev" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg>
-            </span>
-            <div class="spacer"></div>
-            <div class="seg" aria-hidden="true">
-              <span><svg viewBox="0 0 24 24"><path d="M4 18V6M4 18h16M7 14l4-4 3 3 5-6"/></svg></span>
-              <span class="on"><svg viewBox="0 0 32 32"><use href="#btc-glyph" width="32" height="32"/></svg></span>
-              <span><svg viewBox="0 0 24 24"><path d="M8 4v16M16 4v16M6 8h4v7H6zM14 6h4v9h-4z"/></svg></span>
+          </section>
+
+          <div class="dash">
+            <div class="c4 stack-col">
+              <section class="card"><h2>Profit / Loss</h2><div id="pnl" class="pnl"></div></section>
+              <section class="card signal">
+                <h2>Signal</h2>
+                <div class="prob">
+                  <div class="prob-head">
+                    <span id="prob-outcome" class="prob-outcome">—</span>
+                    <span id="prob-value" class="prob-value">—</span>
+                  </div>
+                  <div class="bar"><div id="prob-bar" class="bar-fill"></div></div>
+                  <div class="kv" id="signal"></div>
+                </div>
+              </section>
+            </div>
+            <div class="c4 stack-col">
+              <section class="card"><h2>Position</h2><div class="kv" id="position"></div></section>
+              <section class="card"><h2>Last decision</h2><div id="decision" class="decision">no decisions yet</div></section>
+              <section class="card"><h2>Feeds</h2><div id="feeds" class="feeds"></div></section>
+            </div>
+            <div class="c4 stack-col">
+              <section class="card"><h2>Market</h2><div class="kv" id="market"></div></section>
+              <section class="card"><h2>Order books</h2><div id="books" class="books"></div></section>
             </div>
           </div>
         </section>
 
-        <div class="cols">
-          <div class="col">
-        <section class="card"><h2>Profit / Loss</h2><div id="pnl" class="pnl"></div></section>
-        <section class="card signal">
-          <h2>Signal</h2>
-          <div class="prob">
-            <div class="prob-head">
-              <span id="prob-outcome" class="prob-outcome">—</span>
-              <span id="prob-value" class="prob-value">—</span>
+        <!-- ================= Activity ================= -->
+        <section id="page-activity" class="page hidden">
+          <div class="page-head">
+            <div><h1>Activity</h1><p class="page-sub">Decisions, orders, positions and trades.</p></div>
+          </div>
+          <section class="card flush">
+            <div class="tabs">
+              <button class="tab active" data-tab="decisions">Decisions</button>
+              <button class="tab" data-tab="orders">Orders</button>
+              <button class="tab" data-tab="positions">Positions</button>
+              <button class="tab" data-tab="trades">Trades</button>
+              <button id="activity-clear" class="btn ghost small tabs-end">Clear</button>
             </div>
-            <div class="bar"><div id="prob-bar" class="bar-fill"></div></div>
-            <div class="kv" id="signal"></div>
-          </div>
+            <div id="tab-decisions" class="tab-panel"><div id="tbl-decisions" class="dlog"></div></div>
+            <div id="tab-orders" class="tab-panel hidden"><table id="tbl-orders"></table></div>
+            <div id="tab-positions" class="tab-panel hidden"><table id="tbl-positions"></table></div>
+            <div id="tab-trades" class="tab-panel hidden"><table id="tbl-trades"></table></div>
+          </section>
         </section>
-        <section class="card"><h2>Order books</h2><div id="books" class="books"></div></section>
-        <section class="card"><h2>Position</h2><div class="kv" id="position"></div></section>
-          </div>
-          <div class="col">
-        <section class="card"><h2>Market</h2><div class="kv" id="market"></div></section>
-        <section class="card"><h2>Feeds</h2><div id="feeds" class="feeds"></div></section>
-        <section class="card"><h2>Last decision</h2><div id="decision" class="decision">no decisions yet</div></section>
-          </div>
-        </div>
-      </section>
 
-      <section id="page-risk" class="page grid hidden">
-        <h1>Risk</h1>
-        <section class="card span2"><h2>Risk status</h2><div class="kv" id="risk"></div></section>
-        <section class="card span2 risk">
-          <h2>Controls</h2>
-          <div class="stack">
-            <h3>Kill switch</h3>
-            <div class="controls">
-              <input id="kill-reason" placeholder="Kill reason" class="input">
-              <input id="kill-phrase" placeholder="Type KILL" class="input narrow">
-              <button id="kill-engage" class="btn danger">Engage kill switch</button>
+        <!-- ================= Analytics ================= -->
+        <section id="page-analytics" class="page hidden">
+          <div class="page-head">
+            <div><h1>Analytics</h1><p class="page-sub">Performance and validation of recorded trades.</p></div>
+            <div class="page-actions"><button id="analytics-refresh" class="btn small">Refresh analytics</button></div>
+          </div>
+          <section class="card">
+            <div id="analytics" class="stats"></div>
+          </section>
+        </section>
+
+        <!-- ================= Risk ================= -->
+        <section id="page-risk" class="page hidden">
+          <div class="page-head">
+            <div><h1>Risk</h1><p class="page-sub">Current limits and operator controls. Every action needs a typed confirmation.</p></div>
+          </div>
+          <div class="split">
+            <section class="card"><h2>Risk status</h2><div class="kv" id="risk"></div></section>
+            <div class="stack-col">
+              <section class="card danger-card">
+                <h2>Kill switch</h2>
+                <div class="form-stack">
+                  <label class="field"><span class="lbl">Reason</span><input id="kill-reason" placeholder="Kill reason" class="input"></label>
+                  <div class="form-row">
+                    <label class="field"><span class="lbl">Confirmation</span><input id="kill-phrase" placeholder="Type KILL" class="input"></label>
+                    <button id="kill-engage" class="btn danger">Engage kill switch</button>
+                  </div>
+                  <div class="divider"></div>
+                  <div class="form-row">
+                    <label class="field"><span class="lbl">Confirmation</span><input id="clear-phrase" placeholder="Type CLEAR KILL" class="input"></label>
+                    <button id="kill-clear" class="btn">Clear kill switch</button>
+                  </div>
+                </div>
+              </section>
+              <section class="card warn-card">
+                <h2>Daily loss lock</h2>
+                <div class="form-row">
+                  <label class="field"><span class="lbl">Confirmation</span><input id="reset-phrase" placeholder="Type RESET DAY" class="input"></label>
+                  <button id="reset-day" class="btn warn">Reset day lock</button>
+                </div>
+              </section>
             </div>
-            <div class="controls">
-              <input id="clear-phrase" placeholder="Type CLEAR KILL" class="input narrow">
-              <button id="kill-clear" class="btn">Clear kill switch</button>
+          </div>
+        </section>
+
+        <!-- ================= Rules ================= -->
+        <section id="page-rules" class="page hidden">
+          <div class="page-head">
+            <div><h1>Rules</h1><p class="page-sub">Resolution rules and their approval status.</p></div>
+          </div>
+          <section class="card flush">
+            <div id="tab-rules" class="table-wrap"><table id="tbl-rules"></table></div>
+          </section>
+        </section>
+
+        <!-- ================= Go live ================= -->
+        <section id="page-golive" class="page hidden">
+          <div class="page-head">
+            <div><h1>Go live</h1><p class="page-sub">LIVE stays locked until every gate condition passes and you type the activation phrase.</p></div>
+          </div>
+          <div class="split">
+            <section class="card gate">
+              <h2>Live trading gate</h2>
+              <div class="gate-head">
+                <span id="gate-summary" class="muted">not evaluated</span>
+                <button id="gate-refresh" class="btn small">Evaluate</button>
+              </div>
+              <div class="meter" aria-hidden="true"><div id="gate-meter" class="meter-fill"></div></div>
+              <div id="gate-list" class="gate-list"></div>
+            </section>
+            <div class="stack-col">
+              <section class="card danger-card">
+                <h2>Activate LIVE</h2>
+                <div class="form-stack">
+                  <label class="field"><span class="lbl">Confirmation</span><input id="activate-phrase" class="input" placeholder="Type ACTIVATE LIVE TRADING"></label>
+                  <div><button id="activate" class="btn danger">Activate LIVE</button></div>
+                </div>
+              </section>
+              <section class="card">
+                <h2>Revoke LIVE</h2>
+                <div class="form-stack">
+                  <label class="field"><span class="lbl">Reason</span><input id="revoke-reason" class="input" placeholder="Revocation reason"></label>
+                  <label class="field"><span class="lbl">Confirmation</span><input id="revoke-phrase" class="input" placeholder="Type REVOKE LIVE"></label>
+                  <div><button id="revoke" class="btn">Revoke LIVE</button></div>
+                </div>
+              </section>
+              <section class="card danger-card">
+                <h2>Heartbeat arm test</h2>
+                <div class="form-stack">
+                  <p class="small muted hint">One-way: the first accepted heartbeat arms a key-wide cancel-all deadline. There is no disarm. Only run with a dedicated key and no open orders.</p>
+                  <label class="check"><input id="hb-confirm" type="checkbox"> I understand this is irreversible</label>
+                  <label class="field"><span class="lbl">Confirmation</span><input id="hb-phrase" class="input" placeholder="Type ARM HEARTBEAT"></label>
+                  <div><button id="hb-test" class="btn danger" disabled>Arm heartbeat</button></div>
+                </div>
+              </section>
             </div>
-            <h3>Daily loss lock</h3>
-            <div class="controls">
-              <input id="reset-phrase" placeholder="Type RESET DAY" class="input narrow">
-              <button id="reset-day" class="btn warn">Reset day lock</button>
-            </div>
           </div>
         </section>
-      </section>
 
-      <section id="page-golive" class="page grid hidden">
-        <h1>Go live</h1>
-        <section class="card span2 gate">
-          <h2>Live trading gate</h2>
-          <div class="gate-head">
-            <span id="gate-summary" class="muted">not evaluated</span>
-            <button id="gate-refresh" class="btn ghost small">Evaluate</button>
+        <!-- ================= Settings ================= -->
+        <section id="page-settings" class="page readable hidden">
+          <div class="page-head">
+            <div><h1>Settings</h1><p class="page-sub">Trading switch and runtime configuration. Changes apply after you save.</p></div>
           </div>
-          <div id="gate-list" class="gate-list"></div>
-        </section>
-        <section class="card span2 risk">
-          <h2>Activation</h2>
-          <div class="stack">
-            <input id="activate-phrase" class="input" placeholder="Type ACTIVATE LIVE TRADING">
-            <button id="activate" class="btn danger">Activate LIVE</button>
-            <input id="revoke-phrase" class="input" placeholder="Type REVOKE LIVE">
-            <input id="revoke-reason" class="input" placeholder="Revocation reason">
-            <button id="revoke" class="btn">Revoke LIVE</button>
-          </div>
-          <div class="danger-zone">
-            <h3>Heartbeat arm test</h3>
-            <p class="small muted">One-way: the first accepted heartbeat arms a key-wide cancel-all deadline. There is no disarm. Only run with a dedicated key and no open orders.</p>
-            <label class="check"><input id="hb-confirm" type="checkbox"> I understand this is irreversible</label>
-            <input id="hb-phrase" class="input" placeholder="Type ARM HEARTBEAT">
-            <button id="hb-test" class="btn danger" disabled>Arm heartbeat</button>
-          </div>
-        </section>
-      </section>
-
-      <section id="page-activity" class="page grid one full hidden">
-        <h1>Activity</h1>
-        <section class="card">
-          <div class="tabs">
-            <button class="tab active" data-tab="decisions">Decisions</button>
-            <button class="tab" data-tab="orders">Orders</button>
-            <button class="tab" data-tab="positions">Positions</button>
-            <button class="tab" data-tab="trades">Trades</button>
-            <button id="activity-clear" class="btn ghost small" style="margin-left:auto;margin-bottom:4px">Clear</button>
-          </div>
-          <div id="tab-decisions" class="tab-panel"><div id="tbl-decisions" class="dlog"></div></div>
-          <div id="tab-orders" class="tab-panel hidden"><table id="tbl-orders"></table></div>
-          <div id="tab-positions" class="tab-panel hidden"><table id="tbl-positions"></table></div>
-          <div id="tab-trades" class="tab-panel hidden"><table id="tbl-trades"></table></div>
-        </section>
-      </section>
-
-      <section id="page-analytics" class="page grid one hidden">
-        <h1>Analytics</h1>
-        <section class="card">
-          <div id="analytics" class="stats"></div>
-          <div class="controls"><button id="analytics-refresh" class="btn ghost small">Refresh analytics</button></div>
-        </section>
-      </section>
-
-      <section id="page-rules" class="page grid one full hidden">
-        <h1>Rules</h1>
-        <section class="card">
-          <p class="small muted">Resolution rules and their approval status.</p>
-          <div id="tab-rules" class="table-wrap"><table id="tbl-rules"></table></div>
-        </section>
-      </section>
-
-      <section id="page-settings" class="page grid one wide hidden">
-        <h1>Settings</h1>
-        <section class="card">
           <div id="tab-settings">
-      <div class="group trading-switch" style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;">
-        <div>
-          <strong>Trading</strong> <span id="trading-state" class="badge">…</span>
-          <p class="muted" style="margin:4px 0 0">OFF = no new trades. An already open position is still managed and closed normally. Applies immediately.</p>
-        </div>
-        <button id="trading-toggle" type="button" class="btn">…</button>
-      </div>
-      <form id="settings-form" class="settings-form" autocomplete="off">
-            <fieldset class="group"><legend>Capital and risk</legend><div class="fields">
-              <label>Capital (USDC)<input id="cfg-capital" type="number" step="0.01" min="0"></label>
-              <label>LIVE: capital = wallet balance<input id="cfg-capfrombal" type="checkbox"></label>
-              <label>Trade size per buy (USDC, empty = use risk %)<input id="cfg-tradesize" type="number" step="0.01" min="0"></label>
-              <label>Risk per trade (%)<input id="cfg-risk" type="number" step="0.001" min="0" max="2"></label>
-              <label>Daily loss limit (USDC)<input id="cfg-daily" type="number" step="0.01" min="0.01"></label>
-            </div></fieldset>
-            <fieldset class="group"><legend>Entry</legend><div class="fields">
-              <label>Strategy<select id="cfg-strategy"><option value="momentum">momentum</option><option value="reversal">reversal</option><option value="breakout">breakout</option><option value="trend_confirmation">trend_confirmation</option></select></label>
-              <label>Minimum probability<input id="cfg-prob" type="number" step="0.01" min="0" max="1"></label>
-              <label>Minimum net edge<input id="cfg-edge" type="number" step="0.005" min="0" max="1"></label>
-              <label>Maximum spread<input id="cfg-spread" type="number" step="0.005" min="0" max="1"></label>
-              <label class="check"><input id="cfg-rules" type="checkbox"> Require resolution-rule approval</label>
-            </div></fieldset>
-            <fieldset class="group"><legend>Exits</legend><div class="fields">
-              <label>Take profit (ROI)<input id="cfg-tp" type="number" step="0.01"></label>
-              <label>Stop loss (ROI)<input id="cfg-sl" type="number" step="0.01"></label>
-              <label>Minimum hold (seconds)<input id="cfg-minhold" type="number" step="1" min="0"></label>
-              <label class="check"><input id="cfg-dyntp" type="checkbox"> Dynamic take profit</label>
-              <label>Dynamic take profit, min multiple<input id="cfg-dyntpmin" type="number" step="0.05" min="0.1" max="1"></label>
-              <label>Dynamic take profit, max multiple<input id="cfg-dyntpmax" type="number" step="0.05" min="1"></label>
-              <label>Momentum reversal (z)<input id="cfg-momz" type="number" step="0.1" min="0"></label>
-              <label>Liquidity depth drop (%)<input id="cfg-liqdrop" type="number" step="1" min="1" max="99"></label>
-              <label>Liquidity spread multiple<input id="cfg-liqspread" type="number" step="0.1" min="1.1"></label>
-            </div></fieldset>
-            <fieldset class="group"><legend>Advanced</legend><div class="fields" id="cfg-advanced"></div></fieldset>
-            <div class="savebar"><button type="submit" class="btn primary">Save settings</button><span id="settings-msg" class="small muted"></span></div>
-          </form>
+            <section class="card trading-switch">
+              <div class="ts-text">
+                <div class="ts-title">Trading <span id="trading-state" class="badge">…</span></div>
+                <p class="muted small">OFF = no new trades. An already open position is still managed and closed normally. Applies immediately.</p>
+              </div>
+              <button id="trading-toggle" type="button" class="btn">…</button>
+            </section>
+
+            <form id="settings-form" class="settings-form" autocomplete="off">
+              <section class="card group" role="group" aria-labelledby="g-capital">
+                <h2 id="g-capital">Capital and risk</h2>
+                <div class="fields">
+                  <label class="field"><span class="lbl">Capital (USDC)</span><input id="cfg-capital" type="number" step="0.01" min="0"></label>
+                  <label class="field"><span class="lbl">Trade size per buy (USDC) <small>empty = use risk %</small></span><input id="cfg-tradesize" type="number" step="0.01" min="0"></label>
+                  <label class="field"><span class="lbl">Risk per trade (%)</span><input id="cfg-risk" type="number" step="0.001" min="0" max="2"></label>
+                  <label class="field"><span class="lbl">Daily loss limit (USDC)</span><input id="cfg-daily" type="number" step="0.01" min="0.01"></label>
+                  <label class="toggle"><input id="cfg-capfrombal" type="checkbox"><span>LIVE: capital = wallet balance</span></label>
+                </div>
+              </section>
+
+              <section class="card group" role="group" aria-labelledby="g-entry">
+                <h2 id="g-entry">Entry</h2>
+                <div class="fields">
+                  <label class="field"><span class="lbl">Strategy</span><select id="cfg-strategy"><option value="momentum">momentum</option><option value="reversal">reversal</option><option value="breakout">breakout</option><option value="trend_confirmation">trend_confirmation</option></select></label>
+                  <label class="field"><span class="lbl">Minimum probability</span><input id="cfg-prob" type="number" step="0.01" min="0" max="1"></label>
+                  <label class="field"><span class="lbl">Minimum net edge</span><input id="cfg-edge" type="number" step="0.005" min="0" max="1"></label>
+                  <label class="field"><span class="lbl">Maximum spread</span><input id="cfg-spread" type="number" step="0.005" min="0" max="1"></label>
+                  <label class="toggle"><input id="cfg-rules" type="checkbox"><span>Require resolution-rule approval</span></label>
+                </div>
+              </section>
+
+              <section class="card group" role="group" aria-labelledby="g-exits">
+                <h2 id="g-exits">Exits</h2>
+                <div class="fields">
+                  <label class="field"><span class="lbl">Take profit (ROI)</span><input id="cfg-tp" type="number" step="0.01"></label>
+                  <label class="field"><span class="lbl">Stop loss (ROI)</span><input id="cfg-sl" type="number" step="0.01"></label>
+                  <label class="field"><span class="lbl">Minimum hold (seconds)</span><input id="cfg-minhold" type="number" step="1" min="0"></label>
+                  <label class="toggle"><input id="cfg-dyntp" type="checkbox"><span>Dynamic take profit</span></label>
+                  <label class="field"><span class="lbl">Dynamic take profit, min multiple</span><input id="cfg-dyntpmin" type="number" step="0.05" min="0.1" max="1"></label>
+                  <label class="field"><span class="lbl">Dynamic take profit, max multiple</span><input id="cfg-dyntpmax" type="number" step="0.05" min="1"></label>
+                  <label class="field"><span class="lbl">Momentum reversal (z)</span><input id="cfg-momz" type="number" step="0.1" min="0"></label>
+                  <label class="field"><span class="lbl">Liquidity depth drop (%)</span><input id="cfg-liqdrop" type="number" step="1" min="1" max="99"></label>
+                  <label class="field"><span class="lbl">Liquidity spread multiple</span><input id="cfg-liqspread" type="number" step="0.1" min="1.1"></label>
+                </div>
+              </section>
+
+              <section class="card group" role="group" aria-labelledby="g-advanced">
+                <h2 id="g-advanced">Advanced</h2>
+                <div class="fields" id="cfg-advanced"></div>
+              </section>
+
+              <div class="savebar">
+                <button type="submit" class="btn primary">Save settings</button>
+                <span id="settings-msg" class="small muted"></span>
+              </div>
+            </form>
           </div>
         </section>
-      </section>
-    </main>
+
+      </main>
     </div>
   </div>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
   <script src="/static/hero.js"></script>
   <script src="/static/app.js"></script>

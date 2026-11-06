@@ -585,11 +585,14 @@ function renderDecision(d, position) {
 
 function renderGate(gate) {
   const list = $("gate-list");
+  const meter = $("gate-meter");
   clear(list);
   if (!gate) {
     $("gate-summary").textContent = "not evaluated";
+    if (meter) meter.style.width = "0%";
     return;
   }
+  if (meter) meter.style.width = (gate.total ? Math.round((100 * gate.passed_count) / gate.total) : 0) + "%";
   $("gate-summary").textContent = gate.passed_count + "/" + gate.total + " passed" + (gate.passed ? " · READY" : "");
   $("gate-summary").className = gate.passed ? "muted up" : "muted";
   for (const c of gate.conditions) {
@@ -636,8 +639,22 @@ async function post(path, body) {
   return api(path, { method: "POST", body });
 }
 
+/* Action feedback. The status line is rewritten on every state push (every 500 ms), so a message
+   written only there disappears almost at once; a short toast stays long enough to read. */
+function toast(message) {
+  const box = $("toasts");
+  if (!box) return;
+  const bad = /fail|refus|error|denied|disconnect/i.test(String(message));
+  const node = el("div", "toast" + (bad ? " err" : ""), String(message));
+  box.appendChild(node);
+  while (box.children.length > 4) box.removeChild(box.firstChild);
+  setTimeout(() => node.classList.add("leaving"), 3800);
+  setTimeout(() => node.remove(), 4100);
+}
+
 function report(message) {
   $("status-line").textContent = message;
+  toast(message);
 }
 
 $("kill-engage").addEventListener("click", async () => {
@@ -664,13 +681,16 @@ $("reset-day").addEventListener("click", async () => {
   } catch (err) { report("reset failed: " + err.message); }
 });
 
-$("gate-refresh").addEventListener("click", async () => {
+/* Opening the Go live page re-evaluates the gate silently; only the Evaluate button announces it. */
+async function evaluateGate(announce) {
   try {
     const result = await api("/api/gate");
     renderGate(result.gate);
-    report("gate evaluated: " + result.gate.passed_count + "/" + result.gate.total);
+    if (announce) report("gate evaluated: " + result.gate.passed_count + "/" + result.gate.total);
   } catch (err) { report("gate evaluation failed: " + err.message); }
-});
+}
+
+$("gate-refresh").addEventListener("click", () => evaluateGate(true));
 
 $("activate").addEventListener("click", async () => {
   if (!confirm("Activate LIVE trading? Real funds may be used. All 23 gate conditions must pass.")) return;
@@ -933,6 +953,7 @@ async function loadTab(name) {
       $("cfg-strategy").value = c.strategy;
       $("cfg-rules").checked = !!c.require_rules_approval;
       loadAdvancedFields(c);
+      setSettingsMsg("", "muted");
     }
   } catch (err) {
     report("tab load failed: " + err.message);
@@ -991,15 +1012,25 @@ function buildAdvancedFields() {
   if (!box || box.dataset.built) return;
   box.dataset.built = "1";
   for (const f of ADV_FIELDS) {
+    const isBool = f.kind === "bool";
     const label = document.createElement("label");
-    if (f.kind === "bool") label.className = "check";
+    label.className = isBool ? "toggle" : "field";
     const input = f.kind === "select" ? document.createElement("select") : document.createElement("input");
     input.id = "adv-" + f.key;
-    if (f.kind === "bool") input.type = "checkbox";
+    if (isBool) input.type = "checkbox";
     else if (f.kind === "num") { input.type = "number"; input.step = f.step || "any"; }
     else for (const o of f.options) { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); }
-    if (f.kind === "bool") { label.appendChild(input); label.appendChild(document.createTextNode(" " + f.label)); }
-    else { label.appendChild(document.createTextNode(f.label)); label.appendChild(input); }
+    if (isBool) {
+      label.appendChild(input);
+      label.appendChild(el("span", null, f.label));
+    } else {
+      // "Name (hint)" renders as a title with the hint as quieter small text.
+      const m = /^(.*?)\s*\((.*)\)\s*$/.exec(f.label);
+      const caption = el("span", "lbl", m ? m[1] : f.label);
+      if (m) caption.appendChild(el("small", null, m[2]));
+      label.appendChild(caption);
+      label.appendChild(input);
+    }
     box.appendChild(label);
   }
 }
@@ -1056,12 +1087,22 @@ $("settings-form").addEventListener("submit", async (event) => {
   collectAdvancedFields(patch);
   try {
     await post("/api/config", { patch });
-    $("settings-msg").textContent = "saved";
+    setSettingsMsg("Saved", "saved");
     report("configuration saved");
   } catch (err) {
-    $("settings-msg").textContent = err.message;
+    setSettingsMsg(err.message, "err");
+    report("save failed: " + err.message);
   }
 });
+
+/* Tell the operator when the form differs from what is stored. Values loaded by loadTab() are
+   set from code, which fires no input event, so only real edits mark the form as changed. */
+function setSettingsMsg(message, tone) {
+  const node = $("settings-msg");
+  node.textContent = message;
+  node.className = "small " + (tone || "muted");
+}
+["input", "change"].forEach((evt) => $("settings-form").addEventListener(evt, () => setSettingsMsg("Unsaved changes", "dirty")));
 
 $("analytics-refresh").addEventListener("click", async () => {
   try {
@@ -1104,7 +1145,7 @@ function route() {
     const active = document.querySelector(".tab.active");
     loadTab(active ? active.dataset.tab : "decisions");
   } else if (page === "golive") {
-    $("gate-refresh").click();
+    evaluateGate(false);
   } else if (page === "rules" || page === "settings") {
     loadTab(page);
   }
