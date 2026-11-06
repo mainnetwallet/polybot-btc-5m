@@ -66,6 +66,9 @@ CONFIG_WRITABLE = {
     "max_latency_p95_ms",
     "taker_delay_ms",
     "fee_buffer",
+    "auto_approve_rules",
+    "min_order_notional_usd",
+    "paper_validation_min_trades",
 }
 
 PHRASES = {

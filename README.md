@@ -251,17 +251,15 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
   free web services in the workspace, and one always-on service uses about 730 of them. When the
   hours run out, every free web service in the workspace is suspended until the next month.
 
-**Capital and rules are set by default.** Every start applies capital `1000` (paper money) and
+**Capital and rules are set by default.** Every start applies capital `5` (paper money) and
 auto-approves resolution rules in PAPER mode, so nothing has to be set after a restart. No Render
-variable is needed. To change the behaviour, set these (all optional):
+variable is needed. Change capital, trade size, loss limits, rule auto-approval and every other
+trading option on the dashboard **Settings** page, not in environment variables.
 
-| Variable | Default | Effect |
-|---|---|---|
-| `POLYBOT_DEFAULT_CAPITAL_USD` | `5` | capital applied while `runtime.json` has none |
-| `POLYBOT_AUTO_APPROVE_RULES` | `true` | approves every resolution rule, **PAPER mode only** (never in LIVE) |
-| `POLYBOT_APPROVED_RULE_FINGERPRINTS` | empty | fingerprints approved in any mode (use this for LIVE) |
-
-Auto-approvals are written to the audit log as `env-auto-approve`.
+`.env` / Render variables hold only keys and passwords (dashboard hash and session secret, CLOB API
+credentials, wallet key) plus optional hosting options (ports, folders, heartbeat for LIVE).
+Resolution rules can also be approved from the Rules page. Note: on Render free the disk is wiped on
+every restart, so Settings you changed fall back to their defaults after a restart.
 
 To operate the bot for real, switch to a paid plan with a disk: in `render.yaml` set
 `plan: starter`, uncomment the `disk` block and point the three `POLYBOT_*_DIR` variables at

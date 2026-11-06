@@ -41,7 +41,6 @@ def settings(tmp_path: Path) -> Settings:
         clob_api_key="test-key",
         clob_api_secret="test-secret",
         clob_api_passphrase="test-pass",
-        auto_approve_rules=False,
         default_capital_usd=None,
     )
     s.ensure_dirs()
@@ -65,7 +64,9 @@ def repo(db) -> Repository:
 
 @pytest.fixture
 def config_store(settings: Settings) -> ConfigStore:
-    return ConfigStore(settings.runtime_config_file)
+    store = ConfigStore(settings.runtime_config_file)
+    store.update({"auto_approve_rules": False})
+    return store
 
 
 @pytest.fixture

@@ -323,8 +323,8 @@ def test_unfunded_paper_broker_is_funded_when_capital_is_set_later(settings, rep
     assert engine._balance == Decimal("200")
 
 
-def test_auto_approve_rules_env_approves_in_paper(settings, repo, adapter, config_store):
-    settings.auto_approve_rules = True
+def test_auto_approve_rules_setting_approves_in_paper(settings, repo, adapter, config_store):
+    config_store.update({"auto_approve_rules": True})
     clock = FixedClock(START)
     engine, _, spec = _build(settings, repo, adapter, config_store, clock)
 
@@ -335,8 +335,8 @@ def test_auto_approve_rules_env_approves_in_paper(settings, repo, adapter, confi
     assert rule.approved_by == "env-auto-approve"
 
 
-def test_auto_approve_rules_env_never_applies_in_live(settings, repo, adapter, config_store):
-    settings.auto_approve_rules = True
+def test_auto_approve_rules_setting_never_applies_in_live(settings, repo, adapter, config_store):
+    config_store.update({"auto_approve_rules": True})
     clock = FixedClock(START)
     engine, _, spec = _build(settings, repo, adapter, config_store, clock)
     config_store.update({"mode": "LIVE"})
@@ -368,7 +368,6 @@ def test_default_capital_env_applied_on_boot(tmp_path, monkeypatch):
         logs_dir=tmp_path / "logs",
         config_dir=tmp_path / "config",
         default_capital_usd=Decimal("500"),
-        auto_approve_rules=False,
     )
     s.ensure_dirs()
     engine, db_engine = build_default_engine(s, start_api=False)

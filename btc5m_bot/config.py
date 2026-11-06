@@ -75,6 +75,8 @@ class RuntimeConfig(BaseModel):
     time_exit_seconds_before_end: int = 30
 
     min_oracle_coverage_seconds: int = 60
+    # Approve every resolution rule automatically (PAPER mode only, never applied in LIVE).
+    auto_approve_rules: bool = True
     require_rules_approval: bool = True
     live_validation_min_markets: int = 20
     paper_validation_min_trades: int = 300
@@ -341,9 +343,6 @@ class Settings(BaseSettings):
     # POLYBOT_APPROVED_RULE_FINGERPRINTS: comma separated fingerprints that are approved as soon
     # as they are seen, in any mode.
     approved_rule_fingerprints: str | None = None
-    # POLYBOT_AUTO_APPROVE_RULES (default true): approve every resolution rule automatically, PAPER mode
-    # only. It is never applied while the effective mode is LIVE.
-    auto_approve_rules: bool = True
 
     @property
     def pinned_rule_fingerprints(self) -> set[str]:

@@ -376,9 +376,9 @@ class BotEngine:
     # --------------------------------------------------------------- discovery
 
     def _maybe_auto_approve_rule(self, fingerprint: str, cfg: Any) -> Any:
-        """Approve a rule from env settings so approvals survive restarts on ephemeral disks."""
+        """Approve a rule automatically (dashboard setting / pinned env fingerprints)."""
         pinned = fingerprint.lower() in self.settings.pinned_rule_fingerprints
-        auto = self.settings.auto_approve_rules and cfg.mode.value != "LIVE"
+        auto = cfg.auto_approve_rules and cfg.mode.value != "LIVE"
         if not (pinned or auto):
             return None
         self.repo.approve_resolution_rule(fingerprint, "env-auto-approve")

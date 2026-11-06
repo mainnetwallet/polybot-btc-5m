@@ -932,6 +932,7 @@ async function loadTab(name) {
       $("cfg-liqspread").value = c.liquidity_exit_spread_multiple;
       $("cfg-strategy").value = c.strategy;
       $("cfg-rules").checked = !!c.require_rules_approval;
+      loadAdvancedFields(c);
     }
   } catch (err) {
     report("tab load failed: " + err.message);
@@ -960,6 +961,73 @@ $("trading-toggle").addEventListener("click", async () => {
   }
 });
 
+/* Advanced settings: everything else that used to need .env / runtime.json edits. Built from this
+   table so the form, the loader and the saver cannot drift apart. kind: num | bool | select.
+   nullable: an empty box saves null (feature off). */
+const ADV_FIELDS = [
+  { key: "auto_approve_rules", label: "Auto-approve resolution rules (PAPER only)", kind: "bool" },
+  { key: "strategy_mode", label: "Strategy mode", kind: "select", options: ["ACTIVE", "SHADOW", "OFF"] },
+  { key: "daily_profit_lock_pct", label: "Daily profit lock (fraction of capital, empty = off)", kind: "num", step: "0.01", nullable: true },
+  { key: "max_consecutive_losses", label: "Max consecutive losses (1-2)", kind: "num", step: "1" },
+  { key: "cooldown_minutes", label: "Cooldown after losses (minutes)", kind: "num", step: "1" },
+  { key: "entry_window_seconds", label: "Entry window (seconds, max 120)", kind: "num", step: "1" },
+  { key: "max_slippage", label: "Max slippage", kind: "num", step: "0.001" },
+  { key: "min_depth_multiple", label: "Min book depth (x trade size)", kind: "num", step: "0.1" },
+  { key: "trailing_stop_pct", label: "Trailing stop (fraction)", kind: "num", step: "0.01" },
+  { key: "time_exit_seconds_before_end", label: "Time exit (seconds before market end)", kind: "num", step: "1" },
+  { key: "min_oracle_coverage_seconds", label: "Min oracle coverage (seconds)", kind: "num", step: "1" },
+  { key: "max_data_age_ms", label: "Max BTC data age (ms)", kind: "num", step: "1" },
+  { key: "max_book_age_ms", label: "Max order book age (ms)", kind: "num", step: "1" },
+  { key: "max_ack_latency_ms", label: "Max order ack latency (ms, max 3000)", kind: "num", step: "1" },
+  { key: "max_latency_p95_ms", label: "Max p95 latency (ms)", kind: "num", step: "1" },
+  { key: "taker_delay_ms", label: "Paper taker delay (ms)", kind: "num", step: "1" },
+  { key: "fee_buffer", label: "Fee buffer (USDC per share)", kind: "num", step: "0.001" },
+  { key: "min_order_notional_usd", label: "Exchange minimum order (USDC, empty = share minimum)", kind: "num", step: "0.01", nullable: true },
+  { key: "paper_validation_min_trades", label: "Paper validation: min trades", kind: "num", step: "1" },
+];
+
+function buildAdvancedFields() {
+  const box = $("cfg-advanced");
+  if (!box || box.dataset.built) return;
+  box.dataset.built = "1";
+  for (const f of ADV_FIELDS) {
+    const label = document.createElement("label");
+    if (f.kind === "bool") label.className = "check";
+    const input = f.kind === "select" ? document.createElement("select") : document.createElement("input");
+    input.id = "adv-" + f.key;
+    if (f.kind === "bool") input.type = "checkbox";
+    else if (f.kind === "num") { input.type = "number"; input.step = f.step || "any"; }
+    else for (const o of f.options) { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); }
+    if (f.kind === "bool") { label.appendChild(input); label.appendChild(document.createTextNode(" " + f.label)); }
+    else { label.appendChild(document.createTextNode(f.label)); label.appendChild(input); }
+    box.appendChild(label);
+  }
+}
+
+function loadAdvancedFields(c) {
+  buildAdvancedFields();
+  for (const f of ADV_FIELDS) {
+    const input = $("adv-" + f.key);
+    if (!input) continue;
+    if (f.kind === "bool") input.checked = !!c[f.key];
+    else input.value = c[f.key] === null || c[f.key] === undefined ? "" : String(c[f.key]);
+  }
+}
+
+function collectAdvancedFields(patch) {
+  for (const f of ADV_FIELDS) {
+    const input = $("adv-" + f.key);
+    if (!input) continue;
+    if (f.kind === "bool") patch[f.key] = input.checked;
+    else if (f.kind === "select") patch[f.key] = input.value;
+    else {
+      const v = input.value.trim();
+      if (v === "") { if (f.nullable) patch[f.key] = null; }
+      else patch[f.key] = v;
+    }
+  }
+}
+
 $("settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const patch = {
@@ -985,6 +1053,7 @@ $("settings-form").addEventListener("submit", async (event) => {
   patch.capital_usd = capital === "" ? null : capital;
   const tradeSize = $("cfg-tradesize").value.trim();
   patch.trade_size_usd = tradeSize === "" ? null : tradeSize;
+  collectAdvancedFields(patch);
   try {
     await post("/api/config", { patch });
     $("settings-msg").textContent = "saved";
