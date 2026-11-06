@@ -93,7 +93,7 @@ def test_every_writable_key_is_a_real_field():
 # accepted by the API and keep their stored/default value, but have no control on the page. A NEW
 # writable key must either get a control or be added here on purpose, so nothing is forgotten silently.
 NOT_ON_SETTINGS_PAGE = {
-    "daily_profit_lock_pct", "max_slippage", "min_depth_multiple", "dynamic_take_profit",
+    "daily_profit_lock_usd", "max_slippage", "min_depth_multiple", "dynamic_take_profit",
     "dynamic_tp_min_multiple", "trailing_stop_pct", "momentum_reversal_z",
     "min_hold_seconds_before_reversal", "liquidity_exit_depth_drop_pct", "liquidity_exit_spread_multiple",
     "time_exit_seconds_before_end", "min_oracle_coverage_seconds", "strategy_mode", "feature_modes",

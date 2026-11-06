@@ -144,8 +144,6 @@ class ReasonCode(str, Enum):
     OK = "OK"
     SYSTEM_BLOCKED = "SYSTEM_BLOCKED"
     NOT_ARMED = "NOT_ARMED"
-    CAPITAL_UNSET = "CAPITAL_UNSET"
-    CAPITAL_BELOW_MINIMUM = "CAPITAL_BELOW_MINIMUM"
     MARKET_NOT_ACTIVE = "MARKET_NOT_ACTIVE"
     MARKET_NOT_VALIDATED = "MARKET_NOT_VALIDATED"
     MARKET_VERSION_UNSUPPORTED = "MARKET_VERSION_UNSUPPORTED"
@@ -453,7 +451,6 @@ class RiskDecision:
     max_shares: Decimal = Decimal(0)
     planned_loss: Decimal = Decimal(0)
     fee_estimate: Decimal = Decimal(0)
-    capital_required: Decimal = Decimal(0)
 
 
 def floor_to_step(value: Decimal, step: Decimal) -> Decimal:

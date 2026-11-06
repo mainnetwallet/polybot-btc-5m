@@ -36,7 +36,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     cfg = store.snapshot()
     db.dispose()
     print(f"initialised database: {settings.database_label}")
-    print(f"runtime config:       {settings.runtime_config_file} (mode={cfg.mode.value}, capital={cfg.capital_usd})")
+    print(f"runtime config:       {settings.runtime_config_file} (mode={cfg.mode.value}, trade_size={cfg.trade_size_usd})")
     print("next steps:")
     print("  1. python -m btc5m_bot hash-password > hash.txt      # set POLYBOT_DASHBOARD_PASSWORD_HASH")
     print("  2. set POLYBOT_SESSION_SECRET to a long random value")

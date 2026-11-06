@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ from .db.engine import (
 from .db.models import PositionRow
 from .db.repo import DuplicateOrderError, Repository
 from .exchange.base import Balance, ExchangeAdapter, GeoResult
-from .exchange.fees import FeeSchedule, taker_fee
+from .exchange.fees import FeeSchedule
 from .exchange.sdk_adapter import PolymarketAdapter
 from .execution.executor import ExecutionEngine
 from .execution.feasibility import assess_exit_feasibility
@@ -50,7 +50,6 @@ from .oracle.simulator import compare_to_actual, resolve_market
 from .oracle.twap import PolyBoltTwapFeed, TwapObservation, TwapTracker
 from .recovery import RecoveryManager, RecoveryResult
 from .risk import ExposureLedger, RiskManager, RiskStatus
-from .risk.capital import balance_capital_target
 from .sizing import size_position
 from .state import EngineStateStore
 from .types import (
@@ -566,25 +565,8 @@ class BotEngine:
             outcomes.append(Outcome.DOWN)
         await asyncio.gather(*(fetch(o) for o in outcomes))
 
-    def _sync_paper_capital(self) -> None:
-        """Fund an unfunded paper broker once capital_usd is configured after startup.
-
-        The broker is created once at boot with the capital known then. If capital was unset, its
-        cash stayed 0 and every entry failed with INSUFFICIENT_BALANCE even after the operator set
-        capital in the dashboard. Only a pristine broker (no cash, no fills, no positions) is funded,
-        so existing paper results are never rewritten.
-        """
-        target = self._config().capital_usd
-        if target is None or target <= 0:
-            return
-        if self.paper.cash <= 0 and not self.paper.positions and not self.paper.has_history:
-            self.paper.cash = target
-            self.repo.set_state("paper_initial_capital", {"amount": str(target)})
-
     async def _refresh_balance(self, now: datetime) -> None:
         if self._effective_mode is Mode.PAPER:
-            if self.paper is not None:
-                self._sync_paper_capital()
             self._balance = self.paper.balance if self.paper is not None else None
             return
         mono = self.clock.monotonic()
@@ -595,24 +577,9 @@ class BotEngine:
             balance = await self.adapter.get_balance()
             self._balance = balance.available
             self._balance_at = now
-            self._sync_capital_to_balance(now)
         except Exception as exc:  # noqa: BLE001
             log.warning("balance refresh failed: %s", exc)
             self._balance = None
-
-    def _sync_capital_to_balance(self, now: datetime) -> None:
-        """LIVE: let capital_usd follow the real wallet balance (see balance_capital_target)."""
-        cfg = self._config()
-        if self._effective_mode is not Mode.LIVE or not cfg.capital_from_balance:
-            return
-        flat = self.repo.active_reserved_total() <= 0 and not self.ledger.has_active_position(Mode.LIVE.value)
-        day = self.repo.get_risk_day(now.astimezone(timezone.utc).date())
-        target = balance_capital_target(
-            balance=self._balance, current_capital=cfg.capital_usd, flat=flat, day_trades=day.trades
-        )
-        if target is not None:
-            self.config_store.set_capital(target)
-            log.info("capital set to wallet balance: %s", target)
 
     # ------------------------------------------------------------------ health
     def _refresh_health(self, now: datetime) -> None:
@@ -919,8 +886,7 @@ class BotEngine:
             self._note(now, "NO_TRADE", ReasonCode.SLIPPAGE_TOO_HIGH, "limit price below best ask")
             return
         sizing = size_position(
-            capital=cfg.capital_usd,
-            risk_pct=cfg.risk_per_trade_pct,
+            trade_size_usd=cfg.trade_size_usd,
             balance=self._balance,
             reserved=self.repo.active_reserved_total(),
             book=book,
@@ -929,7 +895,6 @@ class BotEngine:
             fee_buffer=cfg.fee_buffer,
             max_price=limit_price,
             min_notional_usd=cfg.min_order_notional_usd,
-            fixed_notional_usd=cfg.trade_size_usd,
         )
         if not sizing.allowed:
             self._note(now, "NO_TRADE", sizing.reason, sizing.detail, probability=p.p_up, extra={"sizing": self._sizing_dict(sizing)})
@@ -1000,7 +965,7 @@ class BotEngine:
             market_id=market.market_id,
             mode=self._effective_mode,
             planned_loss=sizing.worst_case_loss,
-            planned_cost=sizing.capital_required,
+            planned_cost=sizing.order_cost,
             balance=self._balance,
             recovery_ready=True,
             entries_used=self.ledger.entries_used(market.market_id, self._effective_mode.value),
@@ -1790,8 +1755,6 @@ class BotEngine:
                 "gate": self._gate_report.as_dict() if self._gate_report else None,
             },
             config={
-                "capital_usd": _dec(cfg.capital_usd),
-                "risk_per_trade_pct": _dec(cfg.risk_per_trade_pct),
                 "trade_size_usd": _dec(cfg.trade_size_usd),
                 "daily_loss_limit_usd": _dec(cfg.daily_loss_limit_usd),
                 "max_consecutive_losses": cfg.max_consecutive_losses,
@@ -1875,17 +1838,10 @@ class BotEngine:
         rules_approved = False
         if market is not None:
             up_book, down_book = self._market_books(market)
-            schedule = FeeSchedule.from_market(market)
             if up_book and up_book.best_ask:
                 min_shares = max(market.min_order_size, up_book.min_order_size)
-                unit = up_book.best_ask + taker_fee(Decimal(1), up_book.best_ask, schedule) + cfg.fee_buffer
-                cost = min_shares * unit
-                risk_budget = (cfg.capital_usd or Decimal(0)) * cfg.risk_per_trade_pct
-                target_ok = (
-                    cfg.trade_size_usd is None
-                    or (min_shares * up_book.best_ask <= cfg.trade_size_usd <= risk_budget)
-                )
-                affordable = cfg.capital_usd is not None and cost <= risk_budget and target_ok
+                # The trade size must be able to buy the venue's minimum share quantity.
+                affordable = min_shares * up_book.best_ask <= cfg.trade_size_usd
                 min_buy = affordable and up_book.depth(Side.BUY) >= min_shares
             min_sell = bool(
                 up_book
@@ -1913,13 +1869,12 @@ class BotEngine:
                 self.settings.funder_address and re.fullmatch(r"0x[0-9a-fA-F]{40}", self.settings.funder_address)
             ),
             balance=balance,
-            capital=cfg.capital_usd,
-            allowance_required=cfg.capital_usd,
+            min_balance=cfg.trade_size_usd,
+            allowance_required=cfg.trade_size_usd,
             allowance_ok=bool(
                 balance is not None
                 and balance.allowance is not None
-                and cfg.capital_usd is not None
-                and balance.allowance >= cfg.capital_usd
+                and balance.allowance >= cfg.trade_size_usd
             ),
             reconciliation_clean=recovery_row.state == "READY" and not open_orders,
             recovery_ready=recovery_row.state == "READY",
@@ -1944,8 +1899,8 @@ class BotEngine:
             statistical_validation_passed=validation.passed,
             final_confirmation=False,
             details={
-                "balance": f"available={balance.available if balance else 'unknown'} required={cfg.capital_usd}",
-                "allowance": f"allowance={balance.allowance if balance else 'unknown'} required={cfg.capital_usd}",
+                "balance": f"available={balance.available if balance else 'unknown'} required={cfg.trade_size_usd}",
+                "allowance": f"allowance={balance.allowance if balance else 'unknown'} required={cfg.trade_size_usd}",
                 "recovery": recovery_row.detail,
                 "feeds": "; ".join(fused.reasons) if fused else "feeds unavailable",
                 "rules": f"confidence={rule_spec.get('confidence', 'LOW')}",
@@ -1955,7 +1910,7 @@ class BotEngine:
                 "protective": risk_status.detail,
                 "disaster_recovery": f"last backup {last_backup.get('at', 'never')}",
                 "protocol": market.version.value if market else "no market",
-                "min_buy": f"min cost within risk budget: {min_buy}",
+                "min_buy": f"trade size covers the venue minimum order: {min_buy}",
                 "min_sell": f"bid depth supports minimum SELL: {min_sell}",
                 "wallet_auth": "balance fetch succeeded" if wallet_ok else "balance fetch failed",
                 "funder": self.settings.funder_address or "not configured",
@@ -1980,7 +1935,7 @@ class BotEngine:
             ctx,
             typed_phrase=typed_phrase,
             actor=actor,
-            config={"capital": _dec(self._config().capital_usd)},
+            config={"trade_size_usd": _dec(self._config().trade_size_usd)},
         )
         if report.passed:
             self.config_store.update({"mode": "LIVE"})
@@ -2110,7 +2065,6 @@ class BotEngine:
             "allowed": status.allowed,
             "reason": status.reason.value,
             "detail": status.detail,
-            "capital": _dec(status.capital),
             "daily_pnl": _dec(status.daily_pnl),
             "daily_loss_limit": _dec(status.daily_loss_limit),
             "daily_profit_target": _dec(status.daily_profit_target),
@@ -2130,8 +2084,6 @@ class BotEngine:
             "shares": _dec(sizing.shares),
             "avg_price": _dec(sizing.avg_price),
             "worst_case_loss": _dec(sizing.worst_case_loss),
-            "risk_budget": _dec(sizing.risk_budget),
-            "max_by_risk": _dec(sizing.max_by_risk),
             "max_by_balance": _dec(sizing.max_by_balance),
             "max_by_depth": _dec(sizing.max_by_depth),
         }
@@ -2171,13 +2123,6 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
     init_db(db_engine)
     repo = Repository(make_session_factory(db_engine))
     config_store = ConfigStore.from_settings(settings)
-    if settings.default_capital_usd is not None and config_store.snapshot().capital_usd is None:
-        config_store.set_capital(settings.default_capital_usd)
-        repo.audit(
-            "CAPITAL_DEFAULT_APPLIED",
-            actor="env",
-            detail={"capital_usd": str(settings.default_capital_usd)},
-        )
     clock = RealClock()
     adapter = PolymarketAdapter(settings)
     from .data.btc_feeds import feed_from_name
@@ -2191,6 +2136,7 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
 
     recorder = ParquetRecorder(settings.parquet_path)
     cfg = config_store.snapshot()
+    # The DB state key keeps its historical name so existing databases still restore their PAPER account.
     initial_paper = repo.get_state("paper_initial_capital", {})
     stored_amount = initial_paper.get("amount") if isinstance(initial_paper, dict) else None
     restore_blocked = bool(initial_paper.get("restore_blocked")) if isinstance(initial_paper, dict) else False
@@ -2203,7 +2149,7 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
         if has_legacy_history:
             # Old databases have no persisted starting bankroll. Guessing it from today's
             # config would fabricate cash; restore positions but fail closed on new entries.
-            paper_capital = Decimal(0)
+            paper_start_cash = Decimal(0)
             restore_blocked = True
             repo.set_state(
                 "paper_initial_capital",
@@ -2215,12 +2161,12 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
                 note="legacy PAPER trade history exists but its original starting bankroll is unknown; new entries blocked",
             )
         else:
-            paper_capital = cfg.capital_usd or Decimal(0)
-            repo.set_state("paper_initial_capital", {"amount": str(paper_capital)})
+            paper_start_cash = settings.paper_start_balance_usd
+            repo.set_state("paper_initial_capital", {"amount": str(paper_start_cash)})
     else:
-        paper_capital = Decimal(str(stored_amount))
+        paper_start_cash = Decimal(str(stored_amount))
     paper = PaperBroker.restore_from_repository(
-        paper_capital, clock, repo, taker_delay_ms=cfg.taker_delay_ms
+        paper_start_cash, clock, repo, taker_delay_ms=cfg.taker_delay_ms
     )
     if restore_blocked:
         paper.cash = Decimal(0)

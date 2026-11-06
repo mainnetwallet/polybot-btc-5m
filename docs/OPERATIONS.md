@@ -65,7 +65,7 @@ the proxy answers 502 `dashboard_unavailable`.
 Use `/healthz` for Render's `healthCheckPath` (Render may restart a service whose health check
 keeps failing, and a trading bot should only restart on purpose) and `/health` for UptimeRobot.
 `/health` reports **outages**. A bot that is up but deliberately not trading (`NO TRADE`: unapproved
-rule, unset capital, unhealthy feeds) still returns 200; read those in the **Decisions** tab or
+rule, a too-small trade size, unhealthy feeds) still returns 200; read those in the **Decisions** tab or
 with `status`.
 
 A leftover `data\STOP` file from a previous run is removed when the supervisor starts (after it
@@ -92,7 +92,6 @@ if one is missing):
 |---|---|
 | `OK` | the step succeeded (used on activity-log entries such as fills; not a block) |
 | `TRADING_OFF` | the master trading switch is OFF (the default after a fresh start or restart); no new entries until you turn it ON in Settings. Open positions are still managed |
-| `CAPITAL_UNSET` | allocated capital is not configured |
 | `RECOVERY_NOT_READY` | startup reconciliation has not passed |
 | `FEED_UNHEALTHY` | BTC feed or Chainlink TWAP health is not fully healthy |
 | `STALE_DATA` / `STALE_BOOK` | data/book exceeds age limits |
@@ -116,8 +115,8 @@ if one is missing):
 | `NEGATIVE_EV` | the trade loses money in expectation after fees, slippage and the fee buffer |
 | `INSUFFICIENT_EDGE` | expected value is positive but the net edge is below `min_net_edge` |
 | `FEES_UNVERIFIED` | the market metadata has no fee schedule, so costs cannot be computed |
-| `BELOW_MIN_ORDER` | risk-based size is below the exchange minimum; never upsized |
-| `RISK_LIMIT` | planned loss exceeds the risk budget, or an unresolved working order exists |
+| `BELOW_MIN_ORDER` | the trade size is below the exchange minimum; never upsized |
+| `RISK_LIMIT` | planned loss is not positive, or an unresolved working order exists |
 | `INSUFFICIENT_BALANCE` | balance unavailable, or the planned cost exceeds the available balance |
 | `LATENCY_BREACH` | signal-to-order or order-to-result latency p95 is above `max_latency_p95_ms` |
 | `ACK_OUTSIDE_WINDOW` | too little time left to verify an order acknowledgement inside the entry window |
@@ -129,7 +128,6 @@ if one is missing):
 | `DUPLICATE_ORDER` | an order with the same idempotency key already exists. A failed exit is retried under a new attempt number; a dropped exit is logged as the `EXIT_DUPLICATE_ORDER` protection event |
 | `SYSTEM_BLOCKED` | reserved: defined, not emitted by the current engine |
 | `NOT_ARMED` | reserved: defined, not emitted by the current engine |
-| `CAPITAL_BELOW_MINIMUM` | reserved: defined, not emitted by the current engine |
 | `MARKET_VERSION_UNSUPPORTED` | reserved: defined, not emitted by the current engine |
 | `ORACLE_UNHEALTHY` | reserved: oracle health is reported as `FEED_UNHEALTHY` |
 | `ORACLE_UNVERIFIED` | reserved: defined, not emitted by the current engine |
@@ -150,9 +148,8 @@ if one is missing):
    ```bat
    .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
    ```
-4. Set `capital_usd` in the dashboard or `config\runtime.json`. This is the allocated
-   capital, not the wallet balance. The 2% planned-loss cap applies to both fixed-dollar and
-   percentage sizing. The daily loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
+4. Set `trade_size_usd` in the dashboard or `config\runtime.json` (about $3 or more, so the 5-share
+   exchange minimum fits). The daily loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
 5. Do not judge the strategy from a handful of trades. The statistical validation gate
    requires real recorded outcomes; it fails honestly on an empty database.
 
@@ -281,7 +278,7 @@ support tickets or chats.
 2. Dedicated wallet and dedicated API key only for POLYBOT.
 3. CLOB credentials verified; no VPN/proxy; live geo check returns eligible.
 4. Correct signature type and funder address.
-5. Capital configured; balance and allowance meet the capital requirement.
+5. Trade size set; balance and allowance cover at least one trade.
 6. At least one verified rule fingerprint approved.
 7. Resolution simulator, exposure monitor, risk manager, and backups active.
 8. Heartbeat configured with `POLYBOT_HEARTBEAT_DEDICATED_KEY_CONFIRMED=true` and the

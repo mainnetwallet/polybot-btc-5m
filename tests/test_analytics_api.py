@@ -165,7 +165,7 @@ def test_dashboard_requires_authentication_and_sets_security_headers(client):
     assert "default-src 'self'" in page.headers["content-security-policy"]
     assert page.headers["x-frame-options"] == "DENY"
     assert page.headers["cache-control"] == "no-store"
-    assert 'id="cfg-capital"' in page.text
+    assert 'id="cfg-tradesize"' in page.text
     assert 'id="cfg-prob"' in page.text
     script = test_client.get("/static/app.js")
     assert script.status_code == 200
@@ -234,9 +234,9 @@ def test_config_is_allowlisted_and_hard_limits_rejected(client):
     headers = login(test_client)
     bad = test_client.post("/api/config", json={"patch": {"mode": "LIVE"}}, headers=headers)
     assert bad.status_code == 400
-    hard = test_client.post("/api/config", json={"patch": {"risk_per_trade_pct": "0.05"}}, headers=headers)
+    hard = test_client.post("/api/config", json={"patch": {"max_consecutive_losses": 5}}, headers=headers)
     assert hard.status_code == 400
-    assert "2% cap" in hard.json()["detail"]
+    assert "immutable cap" in hard.json()["detail"]
     before = store.revision
     good = test_client.post("/api/config", json={"patch": {"min_probability": "0.65"}}, headers=headers)
     assert good.status_code == 200
@@ -352,7 +352,7 @@ def test_state_store_version_changes_on_every_update():
 
 def test_activity_clear_deletes_on_click_without_typed_phrase(client, repo):
     test_client, _, _ = client
-    repo.log_decision(market_id="m1", decision="NO_TRADE", reason_code="CAPITAL_UNSET")
+    repo.log_decision(market_id="m1", decision="NO_TRADE", reason_code="NO_SIGNAL")
     headers = login(test_client)
 
     unknown = test_client.post("/api/activity/clear", json={"action": "risk"}, headers=headers)

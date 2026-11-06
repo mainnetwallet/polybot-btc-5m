@@ -278,7 +278,7 @@ class PolymarketAdapter(ExchangeAdapter):
                 if intent.side is Side.BUY:
                     # CLOB BUY market orders are denominated in collateral, not shares:
                     # ``shares`` is rejected by the SDK. Offer the maximum notional and
-                    # cap the all-in spend at the planned capital (notional + fee).
+                    # cap the all-in spend at the planned cost (notional + fee).
                     # The operator sizes in USDC: send exactly that amount. Without it, fall back
                     # to the planning estimate (shares x limit price).
                     notional = intent.usdc_amount if intent.usdc_amount is not None else intent.shares * intent.limit_price

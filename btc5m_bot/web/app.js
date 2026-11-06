@@ -418,7 +418,7 @@ function renderAlert(risk, market) {
   clear(box);
   const items = [];
   if (risk && risk.allowed === false) {
-    const fix = risk.reason === "CAPITAL_UNSET" ? ["Set capital", "#settings"] : ["Open risk", "#risk"];
+    const fix = ["Open risk", "#risk"];
     items.push(["Trading is blocked: " + text(risk.detail || risk.reason), fix]);
   }
   if (market && market.rules_approved === false) items.push(["This market's resolution rules are not approved yet.", ["Approve rules", "#rules"]]);
@@ -438,7 +438,6 @@ function renderRisk(risk) {
     ["allowed", risk.allowed ? "YES" : "NO", risk.allowed ? "up" : "down"],
     ["reason", risk.reason],
     ["detail", risk.detail],
-    ["capital", risk.capital],
     ["daily PnL", risk.daily_pnl, Number(risk.daily_pnl) >= 0 ? "up" : "down"],
     ["daily loss limit", risk.daily_loss_limit],
     ["reserved", risk.reserved],
@@ -1019,34 +1018,26 @@ async function loadTab(name) {
   }
 }
 
-/* Fractions are shown as percentages. Exact, trimmed conversion: no silent rounding of a stored
-   value (0.625 must show 62.5, not 63) and no float noise (0.07 must not show 7.000000000000001). */
-function fractionToPct(v) { return String(+(Number(v) * 100).toFixed(4)); }
-function pctToFraction(v) { return (Number(v) / 100).toFixed(6); }
-
 /* Fill every Settings control from a config object. Used on page load and again after a save, so
    the form always shows what the server really stored. Settings that are not on this page (exit
    fine-tuning, latency limits, feed ages ...) keep their stored/default values; saving never touches them. */
 function fillSettingsForm(c) {
   renderTradingSwitch(!!c.trading_enabled);
-  $("cfg-capital").value = text(c.capital_usd, "");
   $("cfg-tradesize").value = text(c.trade_size_usd, "");
   $("cfg-daily").value = text(c.daily_loss_limit_usd, "");
   $("cfg-strategy").value = c.strategy;
   $("cfg-prob").value = c.min_probability;
   $("cfg-tp").value = c.take_profit_roi;
   $("cfg-sl").value = c.stop_loss_roi;
-  $("cfg-risk").value = fractionToPct(c.risk_per_trade_pct);
   $("cfg-edge").value = c.min_net_edge;
   $("cfg-spread").value = c.max_spread;
   $("cfg-maxloss").value = c.max_consecutive_losses;
   $("cfg-cooldown").value = c.cooldown_minutes;
   $("cfg-rules").checked = !!c.require_rules_approval;
-  $("cfg-capfrombal").checked = !!c.capital_from_balance;
 }
 
-/* Warn in plain words when Capital / Trade size can never produce an order (exchange minimum vs the
-   2% risk cap). Without this the bot just shows endless NO_TRADE rows. */
+/* Warn in plain words when the Trade size can never produce an order (it buys fewer shares than the
+   exchange minimum). Without this the bot just shows endless NO_TRADE rows. */
 function showAdvice(advice) {
   const node = $("cfg-advice");
   if (!node) return;
@@ -1085,11 +1076,11 @@ $("settings-form").addEventListener("submit", async (event) => {
 
   // [config key, input id, label, converter to the stored unit]
   const required = [
+    ["trade_size_usd", "cfg-tradesize", "Trade size", (v) => v],
     ["daily_loss_limit_usd", "cfg-daily", "Daily loss limit", (v) => v],
     ["min_probability", "cfg-prob", "Minimum probability", (v) => v],
     ["take_profit_roi", "cfg-tp", "Take profit", (v) => v],
     ["stop_loss_roi", "cfg-sl", "Stop loss", (v) => v],
-    ["risk_per_trade_pct", "cfg-risk", "Risk per trade", pctToFraction],
     ["min_net_edge", "cfg-edge", "Minimum net edge", (v) => v],
     ["max_spread", "cfg-spread", "Maximum spread", (v) => v],
     ["max_consecutive_losses", "cfg-maxloss", "Max losses in a row", (v) => v],
@@ -1110,11 +1101,6 @@ $("settings-form").addEventListener("submit", async (event) => {
 
   patch.strategy = $("cfg-strategy").value;
   patch.require_rules_approval = $("cfg-rules").checked;
-  patch.capital_from_balance = $("cfg-capfrombal").checked;
-  const capital = $("cfg-capital").value.trim();
-  patch.capital_usd = capital === "" ? null : capital;
-  const tradeSize = $("cfg-tradesize").value.trim();
-  patch.trade_size_usd = tradeSize === "" ? null : tradeSize;
 
   try {
     const r = await post("/api/config", { patch });

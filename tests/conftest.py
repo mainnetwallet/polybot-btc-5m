@@ -43,7 +43,6 @@ def settings(tmp_path: Path) -> Settings:
         clob_api_key="test-key",
         clob_api_secret="test-secret",
         clob_api_passphrase="test-pass",
-        default_capital_usd=None,
         database_url=os.environ.get("POLYBOT_TEST_DATABASE_URL") or None,
     )
     s.ensure_dirs()

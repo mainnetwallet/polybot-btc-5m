@@ -24,7 +24,7 @@
 #     (Settings, orders, positions, paper trades, approved rules, risk state, audit log, last hour of oracle TWAP readings, login lockouts) is kept in
 #     the external database when you set POLYBOT_DATABASE_URL (below) and is restored on start.
 #   * No Shell/SSH, so CLI operator commands (approve-rule, status, backup) cannot be run; use the
-#     dashboard instead. Capital defaults to 5 and PAPER rules are auto-approved on every start, but
+#     dashboard instead. The PAPER balance defaults to 100 and PAPER rules are auto-approved on every start, but
 #     the master trading switch is OFF after each start (runtime.json is wiped): turn it ON in the
 #     dashboard Settings or the bot records TRADING_OFF and opens nothing.
 #   * Idle services spin down after 15 minutes without inbound traffic. An UptimeRobot monitor

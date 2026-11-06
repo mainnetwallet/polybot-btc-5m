@@ -7,7 +7,7 @@ import pytest
 
 def _decision(repo, n: int = 3) -> None:
     for i in range(n):
-        repo.log_decision(market_id=f"m{i}", decision="NO_TRADE", reason_code="CAPITAL_UNSET")
+        repo.log_decision(market_id=f"m{i}", decision="NO_TRADE", reason_code="NO_SIGNAL")
 
 
 def _trade(repo, mode: str, oid: str) -> None:

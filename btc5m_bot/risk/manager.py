@@ -23,7 +23,6 @@ class RiskStatus:
     allowed: bool
     reason: ReasonCode
     detail: str
-    capital: Decimal | None
     equity_floor: Decimal | None
     daily_pnl: Decimal
     daily_loss_limit: Decimal
@@ -68,19 +67,11 @@ class RiskManager:
     def _cfg(self) -> RuntimeConfig:
         return self.config_provider()
 
-    def capital(self) -> Decimal | None:
-        capital = self._cfg().capital_usd
-        return capital if capital is not None and capital > 0 else None
-
     def daily_loss_limit(self) -> Decimal:
         return self._cfg().daily_loss_limit_usd
 
     def daily_profit_target(self) -> Decimal | None:
-        capital = self.capital()
-        pct = self._cfg().daily_profit_lock_pct
-        if capital is None or pct is None:
-            return None
-        return capital * pct
+        return self._cfg().daily_profit_lock_usd
 
     def _today(self, now: datetime):
         return as_utc(now).astimezone(timezone.utc).date()
@@ -102,18 +93,15 @@ class RiskManager:
         # status() on CONSECUTIVE_LOSS_LIMIT forever and the bot can never trade again.
         self._sync_cooldown(now)
         cfg = self._cfg()
-        capital = self.capital()
         day = self.repo.get_risk_day(self._today(now))
         state = self.repo.get_risk_state()
         summary = self.ledger.summary(mode.value, balance)
         limit = cfg.daily_loss_limit_usd
-        target = capital * cfg.daily_profit_lock_pct if (capital and cfg.daily_profit_lock_pct) else None
+        target = cfg.daily_profit_lock_usd
 
         reason = ReasonCode.OK
         detail = "risk checks pass"
-        if capital is None:
-            reason, detail = ReasonCode.CAPITAL_UNSET, "allocated capital is not configured"
-        elif state.kill_switch:
+        if state.kill_switch:
             reason, detail = ReasonCode.KILL_SWITCH, state.kill_reason or "kill switch engaged"
         elif day.locked and day.profit_lock_triggered:
             reason, detail = ReasonCode.PROFIT_LOCK, "daily profit lock reached"
@@ -132,8 +120,7 @@ class RiskManager:
             allowed=reason is ReasonCode.OK,
             reason=reason,
             detail=detail,
-            capital=capital,
-            equity_floor=-limit if capital else None,
+            equity_floor=-limit,
             daily_pnl=day.realized_pnl,
             daily_loss_limit=limit,
             daily_profit_target=target,
@@ -164,9 +151,6 @@ class RiskManager:
         now = as_utc(now or self.clock.now())
         self._sync_cooldown(now)
         cfg = self._cfg()
-        capital = self.capital()
-        if capital is None:
-            return False, ReasonCode.CAPITAL_UNSET, "allocated capital is not configured"
         state = self.repo.get_risk_state()
         if state.kill_switch:
             return False, ReasonCode.KILL_SWITCH, state.kill_reason or "kill switch engaged"
@@ -195,13 +179,6 @@ class RiskManager:
 
         if planned_loss <= 0:
             return False, ReasonCode.RISK_LIMIT, "planned loss must be positive"
-        # Fixed-dollar sizing changes the target amount, never the hard risk ceiling.
-        # Every order must fit inside the same capital percentage regardless of sizing mode.
-        risk_budget = capital * cfg.risk_per_trade_pct
-        if planned_loss > risk_budget:
-            return False, ReasonCode.RISK_LIMIT, f"planned loss {planned_loss} exceeds {risk_budget} risk budget"
-        if planned_cost > risk_budget:
-            return False, ReasonCode.RISK_LIMIT, f"order cost {planned_cost} exceeds {risk_budget} risk budget"
 
         reserved = self.repo.active_reserved_total()
         if balance is None:
@@ -222,7 +199,6 @@ class RiskManager:
     ) -> RiskUpdate:
         now = as_utc(now or self.clock.now())
         cfg = self._cfg()
-        capital = self.capital()
         day = self.repo.get_risk_day(self._today(now))
         state = self.repo.get_risk_state()
         events: list[str] = []
@@ -251,30 +227,29 @@ class RiskManager:
 
         locked = day.locked
         profit_locked = day.profit_lock_triggered
-        if capital is not None:
-            loss_limit = cfg.daily_loss_limit_usd
-            if day_pnl <= -loss_limit and not locked:
-                locked = True
-                events.append("DAILY_LOSS_LIMIT")
-                self.repo.add_protection_event(
-                    "DAILY_LOSS_LIMIT",
-                    "CRITICAL",
-                    market_id=market_id,
-                    daily_pnl=str(day_pnl),
-                    limit=str(loss_limit),
-                )
-            target = capital * cfg.daily_profit_lock_pct if cfg.daily_profit_lock_pct else None
-            if target is not None and day_pnl >= target and not profit_locked:
-                locked = True
-                profit_locked = True
-                events.append("PROFIT_LOCK")
-                self.repo.add_protection_event(
-                    "PROFIT_LOCK",
-                    "INFO",
-                    market_id=market_id,
-                    daily_pnl=str(day_pnl),
-                    target=str(target),
-                )
+        loss_limit = cfg.daily_loss_limit_usd
+        if day_pnl <= -loss_limit and not locked:
+            locked = True
+            events.append("DAILY_LOSS_LIMIT")
+            self.repo.add_protection_event(
+                "DAILY_LOSS_LIMIT",
+                "CRITICAL",
+                market_id=market_id,
+                daily_pnl=str(day_pnl),
+                limit=str(loss_limit),
+            )
+        target = cfg.daily_profit_lock_usd
+        if target is not None and day_pnl >= target and not profit_locked:
+            locked = True
+            profit_locked = True
+            events.append("PROFIT_LOCK")
+            self.repo.add_protection_event(
+                "PROFIT_LOCK",
+                "INFO",
+                market_id=market_id,
+                daily_pnl=str(day_pnl),
+                target=str(target),
+            )
 
         self.repo.update_risk_day(
             day.trading_day,

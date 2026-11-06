@@ -13,7 +13,7 @@ passes a strict 24-condition gate and types an explicit confirmation phrase.
 
 | Limit | Value |
 |---|---|
-| Planned loss per trade | max **2%** of allocated capital (hard cap on `risk_per_trade_pct`), assuming a full loss even with a stop. **Applies to every order, in both sizing modes** (risk-% and fixed-dollar `trade_size_usd`): an order whose worst-case cost exceeds `capital × 2%` is refused, never shrunk to fit. Because the exchange minimum is 5 shares (about $3 at a 0.60 price), this means **capital of roughly $150 or more** is needed before any order can pass; the Settings page warns when Capital / Trade size cannot work |
+| Order size | Every buy is `trade_size_usd` dollars (default 1, must be > 0). Fees, the available balance and the venue minimum still apply: because the exchange minimum is 5 shares (about $3 at a 0.60 price), set `trade_size_usd` to **about $3 or more**; a smaller size is refused, never rounded up. The Settings page warns when the Trade size cannot work |
 | Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1, must be > 0). Configurable in the dashboard Settings; a lock it triggers cannot be bypassed |
 | Consecutive losses before cooldown | max **2** (hard cap), then a cooldown of `cooldown_minutes` (default 15, allowed 1 to 1440) |
 | Concurrent positions | **1** |
@@ -25,7 +25,7 @@ passes a strict 24-condition gate and types an explicit confirmation phrase.
 | Unknown resolution rules | **NO TRADE** |
 | LIVE gate | **24 conditions**, all must pass, plus typed phrase |
 
-The hard caps (2% risk %, 2 consecutive losses, 1 position, 1 entry per market, 120-second entry
+The hard caps (2 consecutive losses, 1 position, 1 entry per market, 120-second entry
 window) are enforced by `RuntimeConfig` validators, not just documentation. Exceeding them raises
 `HardLimitError`. Every other numeric setting has a range check, and the dashboard API answers
 `400` with the reason when a value is out of range. The daily loss limit and the cooldown length
@@ -104,16 +104,17 @@ when generating the hash.
 If you supply a private key, use a **dedicated wallet created only for this bot**, holding no
 funds while you are in PAPER. Never use your main wallet's key.
 
-### 5. Set allocated capital
+### 5. Set the trade size
 
-Edit `config\runtime.json` and replace `"capital_usd": null` with a number, for example:
+Edit `config\runtime.json` (or use the dashboard Settings page) and set how many dollars every buy spends, for example:
 
 ```json
-"capital_usd": 100
+"trade_size_usd": 3
 ```
 
-This is the capital the risk limits are computed from (2% planned loss per trade when sizing by risk %,
-see below; the daily loss limit is a fixed USDC amount, `daily_loss_limit_usd`), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` and does not trade.
+This is the amount of each order. The exchange minimum is 5 shares (about $3 at a 0.60 price), so use about $3
+or more; a smaller size is refused, never rounded up. A fresh PAPER account starts with 100 virtual USDC
+(`POLYBOT_PAPER_START_BALANCE_USD`).
 
 ### 6. Start the bot
 
@@ -246,7 +247,7 @@ and the typed activation phrase).
 | `/health` | readiness, UptimeRobot | 200 only if the supervisor is `RUNNING`, the engine process is alive and its lease is fresh; otherwise 503 with a `reason` |
 
 `/health` reports outages. A bot that is alive but intentionally not trading (unapproved rule,
-unset capital, unhealthy feeds) still returns 200. Details and the full list of reason codes are in
+a too-small trade size, unhealthy feeds) still returns 200. Details and the full list of reason codes are in
 [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ### Free plan limits
@@ -271,7 +272,7 @@ Supabase) and paste its connection URL into the Render variable `POLYBOT_DATABAS
 keeps **all** of its state in that one database: Settings, orders, positions, paper trades, approved
 resolution rules, risk state, exposure reservations, the audit log and the exit manager's memory (trailing-stop
 peaks and depth/spread baselines of open positions, so a restart cannot reset a trailing stop). Every save on the Settings page is
-committed to the database first and loaded again on every start, so capital, trade size, limits, strategy,
+committed to the database first and loaded again on every start, so trade size, limits, strategy,
 feature switches and the trading ON/OFF switch survive restarts, redeploys and spin-downs. If the database
 cannot be written the save is rejected with an error instead of silently reverting later. The Settings
 page shows whether saves are durable. Tables are created automatically on start (or run
@@ -280,11 +281,11 @@ restore); `python -m btc5m_bot backup` only applies to the local SQLite file. No
 parquet market recordings and log files (large and disposable), which still use `POLYBOT_DATA_DIR` /
 `POLYBOT_LOGS_DIR`. Without the variable the behaviour below applies.
 
-**Capital and rules have defaults; the trading switch does not.** Every start applies capital `5`
-(paper money) when none is set and auto-approves resolution rules in PAPER mode, so neither has to
+**The paper balance and rules have defaults; the trading switch does not.** A fresh PAPER account starts with `100`
+virtual USDC (`POLYBOT_PAPER_START_BALANCE_USD`) and resolution rules are auto-approved in PAPER mode on every start, so neither has to
 be set after a restart. Without a settings database the master trading switch is OFF after every start (the settings file is
 wiped on the free plan), so open **Settings** and press **Turn ON** before the bot will open a paper trade.
-No Render variable is needed for any of this. Change capital, trade size, loss limits, rule auto-approval and every other
+No Render variable is needed for any of this. Change trade size, loss limits, rule auto-approval and every other
 trading option on the dashboard **Settings** page, not in environment variables.
 
 `.env` / Render variables hold only keys and passwords (dashboard hash and session secret, CLOB API
@@ -296,7 +297,7 @@ defaults after a restart.
 To operate the bot for real, switch to a paid plan with a disk: in `render.yaml` set
 `plan: starter`, uncomment the `disk` block and point the three `POLYBOT_*_DIR` variables at
 `/var/data/...`. Render Shell then works, so run `python -m btc5m_bot status`,
-`approve-rule <fingerprint>` and `backup` there, and set `capital_usd` in
+`approve-rule <fingerprint>` and `backup` there, and edit settings such as `trade_size_usd` in
 `/var/data/config/runtime.json` (restart afterwards; the file is read at startup).
 
 ---
@@ -311,27 +312,20 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
    ```
    Approval is recorded with an audit entry. Unknown or ambiguous rules stay blocked.
-3. Configure allocated capital in the dashboard or `config\runtime.json`.
-   With risk-% sizing (`trade_size_usd` = null) position size is derived from
-   `capital × 2% / worst-case unit cost`; it is never increased to satisfy the minimum order size.
-   The default is fixed-dollar sizing (below); the same 2% cap applies to it.
-   **Minimum capital:** the exchange minimum is 5 shares, so one order costs about
-   `5 × price` (≈ $3 at 0.60). With the 2% cap that needs capital of about `$150`; a smaller capital
-   (or a `trade_size_usd` below ≈ $3) can never trade and every attempt shows `BELOW_MIN_ORDER`.
-   The Settings page shows this warning in plain words.
+3. Configure the trade size in the dashboard or `config\runtime.json`.
+   Every entry buys about `trade_size_usd` dollars (default `1`; `3` → $3, `5` → $5). The order is never
+   increased to satisfy the exchange minimum: the minimum is 5 shares, so one order costs about
+   `5 × price` (≈ $3 at 0.60). A `trade_size_usd` below that can never trade and every attempt shows
+   `BELOW_MIN_ORDER`. The Settings page shows this warning in plain words.
 
-   **Capital vs balance:** `capital_usd` is the bankroll number the per-trade risk is based on;
-   the balance is the actual cash (PAPER: virtual cash, LIVE: wallet USDC). In **LIVE**,
-   `capital_from_balance` (default `true`) keeps `capital_usd` equal to the wallet balance,
-   refreshed only while the bot is flat and before the day's first trade. In PAPER, capital is
-   the starting virtual bankroll you set.
+   **Balance:** the order must also fit the available balance (PAPER: virtual cash, LIVE: wallet USDC).
+   A fresh PAPER account starts with `POLYBOT_PAPER_START_BALANCE_USD` virtual USDC (default 100).
 
    **Fixed dollar size (default $1, raise it to at least ≈ $3):** every entry buys about
-   `trade_size_usd` dollars. It defaults to `1`; change it in `config\runtime.json` or the *Trade
-   size* field under Settings (`3` → $3, `5` → $5). This is a target, not a risk override: **every** order remains capped
-   at `capital × 2%` including fees and buffer, and the venue's minimum share quantity still
-   applies. If the target cannot satisfy both limits, the bot refuses the entry rather than
-   increasing size. Set `trade_size_usd` to `null` (empty field) to size up to the risk budget.
+   `trade_size_usd` dollars. Change it in `config\runtime.json` or the *Trade size* field under Settings
+   (`3` → $3, `5` → $5). The venue's minimum share quantity, the daily loss limit, the loss-streak guard and
+   the available balance still apply. If the target cannot satisfy them, the bot refuses the entry rather than
+   increasing size.
    Do not assume a marketable FOK/FAK order is exempt from the CLOB minimum share size; exits
    below the current book minimum are treated as unverified and blocked.
 4. Leave the bot PAPER until you have enough real, recorded outcomes to judge it.

@@ -311,7 +311,7 @@ def _passing_context(**overrides) -> GateContext:
         signature_type_verified=True,
         funder_verified=True,
         balance=Balance(available=Decimal("500"), total=Decimal("500"), allowance=Decimal("500")),
-        capital=Decimal("500"),
+        min_balance=Decimal("100"),
         allowance_required=Decimal("100"),
         allowance_ok=True,
         reconciliation_clean=True,

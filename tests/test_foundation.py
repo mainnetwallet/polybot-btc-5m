@@ -33,8 +33,6 @@ def test_sqlite_uses_full_synchronous_for_durable_order_journal(db):
 
 
 def test_risk_limits_are_immutable():
-    with pytest.raises(HardLimitError):
-        RuntimeConfig(risk_per_trade_pct=Decimal("0.021"))
     with pytest.raises(ValueError):
         RuntimeConfig(daily_loss_limit_usd=Decimal("0"))
     with pytest.raises(HardLimitError):
@@ -50,8 +48,7 @@ def test_risk_limits_are_immutable():
 def test_defaults_are_conservative():
     cfg = RuntimeConfig()
     assert cfg.mode is Mode.PAPER
-    assert cfg.capital_usd is None
-    assert cfg.risk_per_trade_pct == Decimal("0.02")
+    assert cfg.trade_size_usd == Decimal("1")
     assert cfg.daily_loss_limit_usd == Decimal("1")
     assert cfg.require_rules_approval is True
     assert cfg.max_active_positions == 1
@@ -59,15 +56,15 @@ def test_defaults_are_conservative():
 
 def test_config_store_is_atomic_and_validated(tmp_path):
     store = ConfigStore(tmp_path / "runtime.json")
-    old, new = store.update({"min_probability": "0.67", "capital_usd": "250"})
+    old, new = store.update({"min_probability": "0.67", "trade_size_usd": "250"})
     assert old.min_probability != new.min_probability
-    assert store.snapshot().capital_usd == Decimal("250")
+    assert store.snapshot().trade_size_usd == Decimal("250")
     raw = json.loads((tmp_path / "runtime.json").read_text())
     assert raw["min_probability"] == "0.67"
     with pytest.raises(HardLimitError):
-        store.update({"risk_per_trade_pct": "0.5"})
+        store.update({"max_consecutive_losses": 5})
     # rejected update leaves the previous file intact
-    assert store.snapshot().risk_per_trade_pct == Decimal("0.02")
+    assert store.snapshot().max_consecutive_losses == 2
 
 
 def test_fee_formula_and_disabled_fees():

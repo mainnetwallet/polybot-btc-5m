@@ -47,7 +47,7 @@ class PaperSettlement:
 class PaperBroker:
     def __init__(
         self,
-        capital: Decimal,
+        starting_cash: Decimal,
         clock: Clock,
         *,
         taker_delay_ms: int = 250,
@@ -56,7 +56,7 @@ class PaperBroker:
         maker_fill_probability: float = 0.30,
         seed: int = 42,
     ) -> None:
-        self.cash = capital
+        self.cash = starting_cash
         self.clock = clock
         self.taker_delay_ms = taker_delay_ms
         self.miss_probability = miss_probability
@@ -68,9 +68,9 @@ class PaperBroker:
         self.has_history = False
 
     @classmethod
-    def restore_from_repository(cls, capital: Decimal, clock: Clock, repo, **kwargs) -> "PaperBroker":
+    def restore_from_repository(cls, starting_cash: Decimal, clock: Clock, repo, **kwargs) -> "PaperBroker":
         """Rebuild PAPER cash and open positions from the durable SQL ledger."""
-        broker = cls(capital, clock, **kwargs)
+        broker = cls(starting_cash, clock, **kwargs)
         trades = repo.list_trades(mode="PAPER", limit=1_000_000)
         if trades:
             broker.has_history = True

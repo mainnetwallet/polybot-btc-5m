@@ -20,7 +20,7 @@ from ..analytics.calibration import calibration_report
 from ..analytics.performance import compute_performance, daily_performance, loss_breakdown
 from ..analytics.validation import _calibration_predictions, build_validation_report
 from ..config import ConfigStore, HardLimitError, RuntimeConfig, Settings
-from ..sizing import capital_advice
+from ..sizing import trade_size_advice
 from ..security import redact
 from .auth import CSRF_HEADER, SESSION_COOKIE, AuthError, AuthManager, Session
 
@@ -31,12 +31,9 @@ _HOST_RE = re.compile(r"[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?")
 
 CONFIG_WRITABLE = {
     "trading_enabled",
-    "capital_usd",
-    "capital_from_balance",
-    "risk_per_trade_pct",
     "trade_size_usd",
     "daily_loss_limit_usd",
-    "daily_profit_lock_pct",
+    "daily_profit_lock_usd",
     "max_consecutive_losses",
     "cooldown_minutes",
     "min_probability",
@@ -93,10 +90,8 @@ def _row(row: Any) -> dict[str, Any]:
 
 
 def _advice(cfg: RuntimeConfig) -> dict[str, Any]:
-    """Tell the operator, in words, when Capital / Trade size cannot ever produce an order."""
-    return capital_advice(
-        capital=cfg.capital_usd,
-        risk_pct=cfg.risk_per_trade_pct,
+    """Tell the operator, in words, when the Trade size cannot ever produce an order."""
+    return trade_size_advice(
         trade_size_usd=cfg.trade_size_usd,
         fee_buffer=cfg.fee_buffer,
     )

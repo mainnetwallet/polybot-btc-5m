@@ -17,14 +17,14 @@ def _store(tmp_path, db_name="settings.db", file_name="runtime.json"):
 def test_saved_settings_survive_wiped_runtime_json(tmp_path):
     """Render free plan: runtime.json is gone after a restart, the database is not."""
     store = _store(tmp_path)
-    store.update({"min_probability": "0.67", "capital_usd": "250", "trading_enabled": True})
+    store.update({"min_probability": "0.67", "trade_size_usd": "250", "trading_enabled": True})
     store.close()
 
     (tmp_path / "runtime.json").unlink()  # the host wiped the local disk
     again = _store(tmp_path)
     cfg = again.snapshot()
     assert cfg.min_probability == Decimal("0.67")
-    assert cfg.capital_usd == Decimal("250")
+    assert cfg.trade_size_usd == Decimal("250")
     assert cfg.trading_enabled is True
     # the local mirror is rebuilt for the supervisor / heartbeat worker
     assert json.loads((tmp_path / "runtime.json").read_text())["min_probability"] == "0.67"
@@ -34,11 +34,9 @@ def test_every_dashboard_writable_field_round_trips_through_the_database(tmp_pat
     store = _store(tmp_path)
     patch = {
         "trading_enabled": True,
-        "capital_usd": "12.5",
-        "capital_from_balance": False,
         "trade_size_usd": "2",
         "daily_loss_limit_usd": "3",
-        "daily_profit_lock_pct": "0.5",
+        "daily_profit_lock_usd": "5",
         "max_consecutive_losses": 1,
         "cooldown_minutes": 30,
         "min_probability": "0.7",
@@ -69,10 +67,9 @@ def test_every_dashboard_writable_field_round_trips_through_the_database(tmp_pat
         "fee_buffer": "0.003",
         "auto_approve_rules": False,
         "min_order_notional_usd": "1.5",
-        "risk_per_trade_pct": "0.01",
     }
     assert set(patch) >= CONFIG_WRITABLE, f"test does not cover: {sorted(CONFIG_WRITABLE - set(patch))}"
-    saved = store.update({k: v for k, v in patch.items() if k in CONFIG_WRITABLE or k == "risk_per_trade_pct"})[1]
+    saved = store.update(patch)[1]
     store.close()
 
     (tmp_path / "runtime.json").unlink()

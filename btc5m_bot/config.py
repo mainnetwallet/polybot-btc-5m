@@ -38,21 +38,16 @@ class RuntimeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    HARD_RISK_PER_TRADE: ClassVar[Decimal] = Decimal("0.02")
     HARD_MAX_POSITIONS: ClassVar[int] = 1
     HARD_MAX_ENTRIES_PER_MARKET: ClassVar[int] = 1
     HARD_MAX_CONSECUTIVE_LOSSES: ClassVar[int] = 2
     HARD_MAX_ACK_LATENCY_MS: ClassVar[int] = 3000
 
     mode: Mode = Mode.PAPER
-    capital_usd: Decimal | None = None
-    risk_per_trade_pct: Decimal = Decimal("0.02")
-    # LIVE only: keep capital_usd equal to the real wallet balance (refreshed while flat, before the
-    # day's first trade). PAPER keeps the capital you set as the virtual starting bankroll.
-    capital_from_balance: bool = True
     # Daily loss limit as a fixed USDC amount (trading locks for the day once realized P&L <= -this).
     daily_loss_limit_usd: Decimal = Decimal("1")
-    daily_profit_lock_pct: Decimal | None = None
+    # Optional daily profit lock as a fixed USDC amount (trading locks once realized P&L >= this).
+    daily_profit_lock_usd: Decimal | None = None
     max_consecutive_losses: int = 2
     cooldown_minutes: int = 15
     max_active_positions: int = 1
@@ -103,10 +98,9 @@ class RuntimeConfig(BaseModel):
     # metadata always applies as well; this setting never substitutes for it.
     min_order_notional_usd: Decimal | None = Decimal("1.00")
 
-    # Fixed dollar target per trade, default $1. null = size up to risk_per_trade_pct of capital.
-    # This is only a sizing target: the 2%-of-capital worst-case-loss cap, venue minimum share
-    # quantity, daily loss limit, loss-streak guard and available balance always apply.
-    trade_size_usd: Decimal | None = Decimal("1")
+    # Fixed dollar amount spent on every buy, default $1. This is the per-order size: the venue
+    # minimum share quantity, daily loss limit, loss-streak guard and available balance still apply.
+    trade_size_usd: Decimal = Decimal("1")
 
     # Master trading switch. OFF blocks every NEW entry (TRADING_OFF). Open positions keep being
     # managed and exited. Defaults to OFF so a fresh or restarted deploy never trades until the
@@ -122,29 +116,23 @@ class RuntimeConfig(BaseModel):
 
     @field_validator("trade_size_usd")
     @classmethod
-    def _trade_size(cls, v: Decimal | None) -> Decimal | None:
-        if v is not None and v <= 0:
-            raise ValueError("trade_size_usd must be positive (or null to size by risk %)")
-        return v
-
-    @field_validator("capital_usd")
-    @classmethod
-    def _capital_positive(cls, v: Decimal | None) -> Decimal | None:
-        if v is not None and v <= 0:
-            raise ValueError("capital_usd must be positive when set")
-        return v
-
-    @field_validator("risk_per_trade_pct")
-    @classmethod
-    def _risk_limit(cls, v: Decimal) -> Decimal:
-        if v <= 0 or v > cls.HARD_RISK_PER_TRADE:
-            raise HardLimitError("risk_per_trade_pct must be > 0 and <= 0.02 (immutable 2% cap)")
+    def _trade_size(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("trade_size_usd must be positive")
         return v
 
     # Settings that existed in older versions but never changed any behaviour (or were replaced).
     # Saved configs that still contain them must keep loading, so they are dropped, not rejected.
     LEGACY_KEYS: ClassVar[frozenset[str]] = frozenset(
-        {"daily_loss_limit_pct", "entry_window_seconds", "dynamic_tp_max_multiple"}
+        {
+            "daily_loss_limit_pct",
+            "entry_window_seconds",
+            "dynamic_tp_max_multiple",
+            "capital_usd",
+            "capital_from_balance",
+            "risk_per_trade_pct",
+            "daily_profit_lock_pct",
+        }
     )
     LEGACY_FEATURES: ClassVar[frozenset[str]] = frozenset(
         {"correlation_shadow", "partial_exits", "ml_model", "feed_failover"}
@@ -156,10 +144,15 @@ class RuntimeConfig(BaseModel):
         # daily_loss_limit_pct: older files stored the daily loss limit as a % of capital (now USDC).
         # entry_window_seconds: the 120 s entry cutoff is fixed in markets/lifecycle.py.
         # dynamic_tp_max_multiple: the take-profit target is never raised above take_profit_roi.
+        # capital_usd / capital_from_balance / risk_per_trade_pct / daily_profit_lock_pct: Capital was
+        # removed; every order is sized by trade_size_usd and the profit lock is now a USDC amount.
         if not isinstance(data, dict):
             return data
         if cls.LEGACY_KEYS & data.keys():
             data = {k: v for k, v in data.items() if k not in cls.LEGACY_KEYS}
+        if "trade_size_usd" in data and data["trade_size_usd"] is None:
+            # Older configs used null for "size by risk % of capital"; fall back to the default.
+            data = {k: v for k, v in data.items() if k != "trade_size_usd"}
         modes = data.get("feature_modes")
         if isinstance(modes, dict) and cls.LEGACY_FEATURES & modes.keys():
             data = {**data, "feature_modes": {k: v for k, v in modes.items() if k not in cls.LEGACY_FEATURES}}
@@ -172,11 +165,11 @@ class RuntimeConfig(BaseModel):
             raise ValueError("daily_loss_limit_usd must be a positive USDC amount")
         return v
 
-    @field_validator("daily_profit_lock_pct")
+    @field_validator("daily_profit_lock_usd")
     @classmethod
     def _profit_lock(cls, v: Decimal | None) -> Decimal | None:
-        if v is not None and (v <= 0 or v > Decimal("1")):
-            raise ValueError("daily_profit_lock_pct must be in (0, 1] or null")
+        if v is not None and v <= 0:
+            raise ValueError("daily_profit_lock_usd must be a positive USDC amount or null")
         return v
 
     @field_validator("max_consecutive_losses")
@@ -411,10 +404,10 @@ class Settings(BaseSettings):
     )
 
     # Persistent defaults. On hosts without a persistent disk (Render free) runtime.json and the
-    # database are wiped on every restart, so capital and rule approvals would have to be set
-    # again by hand. These values are re-applied on every start instead.
-    # POLYBOT_DEFAULT_CAPITAL_USD (default 5): used only while runtime.json has no capital_usd.
-    default_capital_usd: Decimal | None = Field(default=Decimal("5"), gt=0)
+    # database are wiped on every restart, so rule approvals would have to be set again by hand.
+    # These values are re-applied on every start instead.
+    # POLYBOT_PAPER_START_BALANCE_USD (default 100): virtual cash a fresh PAPER account starts with.
+    paper_start_balance_usd: Decimal = Field(default=Decimal("100"), gt=0)
     # POLYBOT_APPROVED_RULE_FINGERPRINTS: comma separated fingerprints that are approved as soon
     # as they are seen, in any mode.
     approved_rule_fingerprints: str | None = None
@@ -715,9 +708,6 @@ class ConfigStore:
             self._config = new
             self._revision += 1
             return old, new
-
-    def set_capital(self, capital: Decimal | None) -> tuple[RuntimeConfig, RuntimeConfig]:
-        return self.update({"capital_usd": capital})
 
     def close(self) -> None:
         if self._db is not None:

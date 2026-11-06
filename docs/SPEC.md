@@ -2,6 +2,8 @@
 ## FINAL MASTER BUILD SPECIFICATION
 ### Quantitative Trading | Autonomous Execution | Profit Optimization | Risk Protection
 
+> **Note (Nov 2026):** the Capital setting and the 2%-of-capital per-order cap described below were removed from the code. Every order is now sized by `trade_size_usd`. The sections below record the original design.
+
 # 1. ROLE AND MISSION
 
 Act as a senior quantitative trading engineer, Python architect, algorithmic trading developer, data engineer and security engineer.

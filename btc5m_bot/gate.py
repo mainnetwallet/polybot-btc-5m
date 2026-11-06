@@ -35,7 +35,7 @@ class GateContext:
     signature_type_verified: bool = False
     funder_verified: bool = False
     balance: Balance | None = None
-    capital: Decimal | None = None
+    min_balance: Decimal | None = None
     allowance_required: Decimal | None = None
     allowance_ok: bool = False
     reconciliation_clean: bool = False
@@ -99,9 +99,9 @@ class LiveGate:
     def evaluate(self, ctx: GateContext) -> GateReport:
         balance_ok = (
             ctx.balance is not None
-            and ctx.capital is not None
-            and ctx.capital > 0
-            and ctx.balance.available >= ctx.capital
+            and ctx.min_balance is not None
+            and ctx.min_balance > 0
+            and ctx.balance.available >= ctx.min_balance
         )
         allowance_ok = (
             ctx.allowance_ok

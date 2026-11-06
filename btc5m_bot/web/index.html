@@ -308,8 +308,7 @@
                 <h2 id="g-basic">Basic</h2>
                 <p id="cfg-advice" class="advice hidden" role="status"></p>
                 <div class="fields">
-                  <label class="field"><span class="lbl">Capital (USDC)</span><input id="cfg-capital" type="number" step="0.01" min="0"></label>
-                  <label class="field"><span class="lbl">Trade size per buy (USDC) <small>empty = biggest the risk cap allows</small></span><input id="cfg-tradesize" type="number" step="0.01" min="0"></label>
+                  <label class="field"><span class="lbl">Trade size per buy (USDC) <small>about $3 or more so the exchange minimum fits</small></span><input id="cfg-tradesize" type="number" step="0.01" min="0.01"></label>
                   <label class="field"><span class="lbl">Daily loss limit (USDC) <small>trading stops for the day</small></span><input id="cfg-daily" type="number" step="0.01" min="0.01"></label>
                   <label class="field"><span class="lbl">Strategy</span><select id="cfg-strategy"><option value="momentum">momentum</option><option value="reversal">reversal</option><option value="breakout">breakout</option><option value="trend_confirmation">trend_confirmation</option></select></label>
                   <label class="field"><span class="lbl">Minimum probability <small>higher = fewer, pickier trades</small></span><input id="cfg-prob" type="number" step="0.01" min="0" max="1"></label>
@@ -321,14 +320,11 @@
               <details class="card group adv" id="g-advanced">
                 <summary><h2>Advanced <small class="muted">(safe defaults, rarely needed)</small></h2></summary>
                 <div class="fields">
-                  <label class="field"><span class="lbl">Risk per trade (%) <small>hard cap 2%</small></span><input id="cfg-risk" type="number" step="0.001" min="0" max="2"></label>
                   <label class="field"><span class="lbl">Minimum net edge</span><input id="cfg-edge" type="number" step="0.005" min="0" max="1"></label>
                   <label class="field"><span class="lbl">Maximum spread</span><input id="cfg-spread" type="number" step="0.005" min="0" max="1"></label>
                   <label class="field"><span class="lbl">Max losses in a row <small>1 or 2</small></span><input id="cfg-maxloss" type="number" step="1" min="1" max="2"></label>
                   <label class="field"><span class="lbl">Pause after those losses (minutes)</span><input id="cfg-cooldown" type="number" step="1" min="1"></label>
-                  <label class="toggle"><input id="cfg-rules" type="checkbox"><span>Require resolution-rule approval</span></label>
-                  <label class="toggle"><input id="cfg-capfrombal" type="checkbox"><span>LIVE: capital = wallet balance</span></label>
-                </div>
+                  <label class="toggle"><input id="cfg-rules" type="checkbox"><span>Require resolution-rule approval</span></label>                </div>
               </details>
 
               <div class="savebar">

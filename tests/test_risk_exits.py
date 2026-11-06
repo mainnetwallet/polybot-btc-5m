@@ -4,7 +4,6 @@ from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
 
 from btc5m_bot.config import RuntimeConfig
 from btc5m_bot.exits import ExitAction, HybridExitManager
@@ -15,12 +14,12 @@ from btc5m_bot.types import Mode, OrderStatus, Outcome, ReasonCode, Regime, Side
 
 from conftest import START, make_book, make_market
 
-CAPITAL = Decimal("1000")
+BALANCE = Decimal("1000")
 
 
 def config(**overrides) -> RuntimeConfig:
     overrides.setdefault("daily_loss_limit_usd", Decimal("40"))
-    return RuntimeConfig(capital_usd=CAPITAL, **overrides)
+    return RuntimeConfig(**overrides)
 
 
 def manager(clock, repo, cfg: RuntimeConfig | None = None) -> RiskManager:
@@ -45,49 +44,25 @@ def intent_for(repo, market, *, shares="10", side=Side.BUY, status=OrderStatus.S
     return intent
 
 
-def test_planned_loss_is_capped_at_two_percent(clock, repo):
-    # the 2% cap applies to risk-% sizing (trade_size_usd = null)
-    risk = manager(clock, repo, config(trade_size_usd=None))
-    ok = risk.pre_trade_check(
-        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("20"),
-        planned_cost=Decimal("20"), balance=CAPITAL, recovery_ready=True,
-    )
-    assert ok[0] is True
-    too_big = risk.pre_trade_check(
-        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("20.01"),
-        planned_cost=Decimal("20"), balance=CAPITAL, recovery_ready=True,
-    )
-    assert too_big[0] is False and too_big[1] is ReasonCode.RISK_LIMIT
-    assert "exceeds" in too_big[2]
-
-
-def test_planned_cost_cannot_exceed_risk_budget(clock, repo):
-    risk = manager(clock, repo, config(trade_size_usd=None))
+def test_non_positive_planned_loss_is_refused(clock, repo):
+    risk = manager(clock, repo)
     allowed, reason, _ = risk.pre_trade_check(
-        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5"),
-        planned_cost=Decimal("25"), balance=CAPITAL, recovery_ready=True,
+        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("0"),
+        planned_cost=Decimal("5"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.RISK_LIMIT
-
-
-def test_no_capital_no_trade(clock, repo):
-    risk = RiskManager(
-        repo=repo, clock=clock,
-        config_provider=lambda: RuntimeConfig(capital_usd=None),
+    ok = risk.pre_trade_check(
+        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5"),
+        planned_cost=Decimal("5"), balance=BALANCE, recovery_ready=True,
     )
-    allowed, reason, _ = risk.pre_trade_check(
-        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
-    )
-    assert not allowed and reason is ReasonCode.CAPITAL_UNSET
-    assert risk.status(Mode.PAPER).allowed is False
+    assert ok[0] is True
 
 
 def test_recovery_not_ready_blocks_entries(clock, repo):
     risk = manager(clock, repo)
     allowed, reason, _ = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5"),
-        planned_cost=Decimal("5"), balance=CAPITAL, recovery_ready=False,
+        planned_cost=Decimal("5"), balance=BALANCE, recovery_ready=False,
     )
     assert not allowed and reason is ReasonCode.RECOVERY_NOT_READY
 
@@ -97,14 +72,14 @@ def test_balance_must_cover_cost_after_reservations(clock, repo):
     repo.reserve("other", "cid-1", Decimal("990"))
     allowed, reason, detail = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5"),
-        planned_cost=Decimal("15"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("15"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.INSUFFICIENT_BALANCE
     repo.release_reservation("cid-1")
     assert repo.active_reserved_total() == 0
     assert risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5"),
-        planned_cost=Decimal("15"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("15"), balance=BALANCE, recovery_ready=True,
     )[0]
 
 
@@ -115,39 +90,39 @@ def test_daily_loss_limit_locks_the_day(clock, repo):
     assert day.locked is True
     allowed, reason, _ = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.DAILY_LOSS_LIMIT
     assert risk.status(Mode.PAPER).locked is True
 
 
 def test_profit_lock_stops_trading_but_is_not_a_loss(clock, repo):
-    cfg = config(daily_profit_lock_pct=Decimal("0.05"))
+    cfg = config(daily_profit_lock_usd=Decimal("50"))
     risk = manager(clock, repo, cfg)
     update = risk.record_result(realized_pnl=Decimal("50"), market_id="mkt-1", mode=Mode.PAPER)
     assert update.locked and "PROFIT_LOCK" in update.events
     allowed, reason, _ = risk.pre_trade_check(
         market_id="mkt-2", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.PROFIT_LOCK
 
 
 def test_daily_loss_limit_is_a_fixed_usdc_amount(clock, repo):
-    # Limit is 1.50 USDC no matter the capital (1000): realized -1.50 locks the day.
+    # Limit is 1.50 USDC no matter the balance (1000): realized -1.50 locks the day.
     cfg = config(daily_loss_limit_usd=Decimal("1.50"))
     risk = manager(clock, repo, cfg)
     assert risk.daily_loss_limit() == Decimal("1.50")
     risk.record_result(realized_pnl=Decimal("-0.80"), market_id="a", mode=Mode.PAPER)
     allowed, reason, _ = risk.pre_trade_check(
         market_id="b", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert allowed or reason is not ReasonCode.DAILY_LOSS_LIMIT
     risk.record_result(realized_pnl=Decimal("-0.70"), market_id="c", mode=Mode.PAPER)
     allowed, reason, _ = risk.pre_trade_check(
         market_id="d", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason in {ReasonCode.DAILY_LOSS_LIMIT, ReasonCode.COOLDOWN}
 
@@ -161,7 +136,7 @@ def test_two_consecutive_losses_start_cooldown(clock, repo):
     assert second.cooldown_until == START + timedelta(minutes=15)
     allowed, reason, _ = risk.pre_trade_check(
         market_id="c", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.COOLDOWN
 
@@ -184,7 +159,7 @@ def test_only_one_active_position_and_one_entry_per_market(clock, repo):
     )
     allowed, reason, _ = risk.pre_trade_check(
         market_id="mkt-other", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.ACTIVE_POSITION
 
@@ -205,7 +180,7 @@ def test_kill_switch_blocks_and_clearing_keeps_cooldown(clock, repo):
     risk.engage_kill_switch("operator test", actor="tester")
     allowed, reason, _ = risk.pre_trade_check(
         market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.KILL_SWITCH
     repo.update_risk_state(consecutive_losses=2, cooldown_until=START + timedelta(minutes=30))
@@ -479,40 +454,6 @@ def test_dynamic_take_profit_locks_a_weak_edge_earlier():
     assert decision.metadata["take_profit_target"] == Decimal("0.15")
 
 
-def test_fixed_trade_size_cannot_bypass_two_percent_risk_cap(clock, repo):
-    cfg = RuntimeConfig(capital_usd=Decimal("20"), trade_size_usd=Decimal("5"))
-    risk = manager(clock, repo, cfg)
-    allowed, reason, detail = risk.pre_trade_check(
-        market_id="mkt-1", mode=Mode.PAPER, planned_loss=Decimal("5.2"),
-        planned_cost=Decimal("5.2"), balance=Decimal("20"), recovery_ready=True,
-    )
-    assert not allowed and reason is ReasonCode.RISK_LIMIT
-    assert "0.40" in detail
-    allowed, reason, _ = risk.pre_trade_check(
-        market_id="mkt-2", mode=Mode.PAPER, planned_loss=Decimal("0.30"),
-        planned_cost=Decimal("0.30"), balance=Decimal("20"), recovery_ready=True,
-    )
-    assert allowed and reason is ReasonCode.OK
-
-
-def test_capital_follows_wallet_balance_only_when_safe():
-    from btc5m_bot.risk.capital import balance_capital_target as target
-
-    D = Decimal
-    # flat, no trades yet today: adopt the balance (rounded down to cents)
-    assert target(balance=D("87.4567"), current_capital=D("1000"), flat=True, day_trades=0) == D("87.45")
-    # unset capital is filled even after trades
-    assert target(balance=D("50"), current_capital=None, flat=True, day_trades=3) == D("50.00")
-    # open position / reserved order: balance understates the bankroll, leave capital alone
-    assert target(balance=D("40"), current_capital=D("100"), flat=False, day_trades=0) is None
-    # after the first trade of the day the daily loss limit stays anchored
-    assert target(balance=D("90"), current_capital=D("100"), flat=True, day_trades=1) is None
-    # nothing to change / bad balance
-    assert target(balance=D("100"), current_capital=D("100"), flat=True, day_trades=0) is None
-    assert target(balance=None, current_capital=D("100"), flat=True, day_trades=0) is None
-    assert target(balance=D("0"), current_capital=D("100"), flat=True, day_trades=0) is None
-
-
 # --------------------------------------------------------------------------- audit regressions
 def test_status_does_not_deadlock_after_cooldown_expires(clock, repo):
     """The engine gates entries on risk.status().allowed, so status() itself must see an
@@ -520,17 +461,17 @@ def test_status_does_not_deadlock_after_cooldown_expires(clock, repo):
     risk = manager(clock, repo)
     risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
     risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
-    during = risk.status(Mode.PAPER, balance=CAPITAL)
+    during = risk.status(Mode.PAPER, balance=BALANCE)
     assert not during.allowed and during.reason is ReasonCode.COOLDOWN
 
     clock.advance(15 * 60 + 1)
-    after = risk.status(Mode.PAPER, balance=CAPITAL)
+    after = risk.status(Mode.PAPER, balance=BALANCE)
     assert after.allowed, (after.reason, after.detail)
     assert after.consecutive_losses == 0 and after.cooldown_until is None
     # and the entry-time check agrees with the gate
     ok, reason, _ = risk.pre_trade_check(
         market_id="c", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert ok and reason is ReasonCode.OK
 
@@ -540,7 +481,7 @@ def test_status_still_blocks_while_cooldown_is_running(clock, repo):
     risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
     risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
     clock.advance(14 * 60)
-    st = risk.status(Mode.PAPER, balance=CAPITAL)
+    st = risk.status(Mode.PAPER, balance=BALANCE)
     assert not st.allowed and st.reason is ReasonCode.COOLDOWN
     assert st.consecutive_losses == 2
 
@@ -550,7 +491,7 @@ def test_cooldown_expiry_does_not_clear_a_daily_lock(clock, repo):
     risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
     risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
     clock.advance(15 * 60 + 1)
-    st = risk.status(Mode.PAPER, balance=CAPITAL)
+    st = risk.status(Mode.PAPER, balance=BALANCE)
     assert not st.allowed and st.reason is ReasonCode.DAILY_LOSS_LIMIT
 
 
@@ -564,13 +505,13 @@ def test_reset_day_lock_warns_when_loss_limit_will_relock(clock, repo):
     # the lock really does come straight back on the next entry check
     allowed, reason, _ = risk.pre_trade_check(
         market_id="b", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
-        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.DAILY_LOSS_LIMIT
 
 
 def test_reset_day_lock_after_profit_lock_does_not_relock(clock, repo):
-    risk = manager(clock, repo, config(daily_profit_lock_pct=Decimal("0.01")))
+    risk = manager(clock, repo, config(daily_profit_lock_usd=Decimal("10")))
     risk.record_result(realized_pnl=Decimal("11"), market_id="a", mode=Mode.PAPER)
     assert repo.get_risk_day(START.date()).profit_lock_triggered is True
     out = risk.reset_day_lock(actor="tester", reason="review")

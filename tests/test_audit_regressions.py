@@ -240,7 +240,7 @@ def test_multi_level_exit_fills_through_the_exit_manager_limit(clock, repo, adap
     book = make_book(asset, bids=levels)
     decision = HybridExitManager().evaluate(
         position=position, market=market, up_book=book, down_book=None, probability=None,
-        config=RuntimeConfig(capital_usd=Decimal("1000"), daily_loss_limit_usd=Decimal("40")),
+        config=RuntimeConfig(daily_loss_limit_usd=Decimal("40")),
         now=START,
     )
     assert decision.action is ExitAction.SELL

@@ -45,7 +45,7 @@ unlimited allowance. It reads the current collateral allowance from the exchange
 LIVE gate requires:
 
 ```text
-allowance >= configured capital_usd
+allowance >= configured trade_size_usd
 ```
 
 If the allowance is insufficient, LIVE activation fails with the exact condition. Any
@@ -73,7 +73,7 @@ before signing anything.
 
 ## Trading safety
 
-- 2% planned-loss cap per trade, computed as a full loss even when a stop is planned.
+- Every order is a fixed `trade_size_usd` amount; the planned loss is computed as a full loss even when a stop is planned.
 - Daily loss limit (fixed USDC amount), profit lock option, two-loss cooldown, one position, one entry per
   market, hard 120-second entry window.
 - Position size is never increased to satisfy exchange minimums; the order is skipped.

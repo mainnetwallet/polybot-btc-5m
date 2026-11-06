@@ -172,20 +172,6 @@ def test_live_mode_without_activation_stays_paper(settings, repo, adapter, confi
     assert engine.state.snapshot()["live_locked"] is True
 
 
-def test_approved_rule_still_blocks_without_allocated_capital(settings, repo, adapter, config_store):
-    clock = FixedClock(START)
-    engine, _, spec = _build(settings, repo, adapter, config_store, clock)
-
-    asyncio.run(engine._iteration())
-    repo.approve_resolution_rule(spec.fingerprint, "test-operator")
-    asyncio.run(engine._iteration())
-
-    assert engine._last_decision is not None
-    assert engine._last_decision["decision"] == "NO_TRADE"
-    assert engine._last_decision["reason"] == ReasonCode.CAPITAL_UNSET.value
-    assert adapter.placed == []
-
-
 def test_gate_pass_alone_cannot_unlock_live(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, _, _ = _build(settings, repo, adapter, config_store, clock)
@@ -309,7 +295,7 @@ def test_settlement_deferred_while_order_unresolved(settings, repo, adapter, con
 def test_trading_switch_defaults_off_and_blocks_new_entries(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, market, spec = _build(settings, repo, adapter, config_store, clock)
-    config_store.update({"capital_usd": "100", "trading_enabled": False})
+    config_store.update({"trading_enabled": False})
     asyncio.run(engine._iteration())  # discovery registers the rule
     repo.approve_resolution_rule(spec.fingerprint, "test-operator")
 
@@ -334,18 +320,6 @@ def test_trading_switch_fresh_config_is_off(config_store):
     from btc5m_bot.config import RuntimeConfig
 
     assert RuntimeConfig().trading_enabled is False
-
-
-def test_unfunded_paper_broker_is_funded_when_capital_is_set_later(settings, repo, adapter, config_store):
-    clock = FixedClock(START)
-    engine, _, _ = _build(settings, repo, adapter, config_store, clock)
-    engine.paper.cash = Decimal(0)  # booted while capital_usd was still unset
-    config_store.update({"capital_usd": "200"})
-
-    asyncio.run(engine._refresh_balance(clock.now()))
-
-    assert engine.paper.cash == Decimal("200")
-    assert engine._balance == Decimal("200")
 
 
 def test_auto_approve_rules_setting_approves_in_paper(settings, repo, adapter, config_store):
@@ -383,21 +357,21 @@ def test_pinned_fingerprint_is_approved_without_auto_flag(settings, repo, adapte
     assert rule is not None and rule.approved
 
 
-def test_default_capital_env_applied_on_boot(tmp_path, monkeypatch):
+def test_paper_start_balance_applied_on_boot(tmp_path, monkeypatch):
     from btc5m_bot.engine import build_default_engine
 
-    monkeypatch.setenv("POLYBOT_DEFAULT_CAPITAL_USD", "500")
+    monkeypatch.setenv("POLYBOT_PAPER_START_BALANCE_USD", "500")
     s = Settings(
         project_root=tmp_path,
         data_dir=tmp_path / "data",
         logs_dir=tmp_path / "logs",
         config_dir=tmp_path / "config",
-        default_capital_usd=Decimal("500"),
+        paper_start_balance_usd=Decimal("500"),
     )
     s.ensure_dirs()
     engine, db_engine = build_default_engine(s, start_api=False)
     try:
-        assert engine.config_store.snapshot().capital_usd == Decimal("500")
+        assert engine.paper.cash == Decimal("500")
     finally:
         db_engine.dispose()
 
