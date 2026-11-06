@@ -23,7 +23,6 @@ from ..types import (
     as_utc,
     utcnow,
 )
-from .feasibility import assess_dust
 from .journal import OrderJournal
 from .paper import PaperBroker
 
@@ -122,7 +121,6 @@ class ExecutionEngine:
         if result.filled_shares > 0:
             existing = self.repo.get_position(market.market_id, mode.value)
             if existing is None:
-                dust = result.filled_shares < market.min_order_size
                 position = self.repo.create_position(
                     market_id=market.market_id,
                     condition_id=market.condition_id,
@@ -133,15 +131,6 @@ class ExecutionEngine:
                     entry_fee=result.fee_usd,
                     mode=mode.value,
                 )
-                if dust:
-                    self.repo.update_position(position.id, status=PositionStatus.DUST.value, dust_shares=result.filled_shares)
-                    self.repo.add_protection_event(
-                        "ENTRY_DUST",
-                        "WARN",
-                        market_id=market.market_id,
-                        shares=str(result.filled_shares),
-                        note="partial fill below SELL minimum; hold to resolution and never submit invalid SELL",
-                    )
                 self.repo.add_trade(
                     market_id=market.market_id,
                     client_order_id=intent.client_order_id,
@@ -209,13 +198,7 @@ class ExecutionEngine:
             proceeds = result.filled_shares * result.avg_price - result.fee_usd
             realized = proceeds - allocated_cost
             remaining = max(Decimal(0), position.shares - result.filled_shares)
-            dust, _ = assess_dust(remaining, market.min_order_size)
-            if remaining <= 0:
-                status = PositionStatus.CLOSED.value
-            elif dust:
-                status = PositionStatus.DUST.value
-            else:
-                status = position.status
+            status = PositionStatus.CLOSED.value if remaining <= 0 else position.status
             self.repo.update_position(
                 position.id,
                 shares=remaining,
@@ -225,7 +208,6 @@ class ExecutionEngine:
                 realized_pnl=position.realized_pnl + realized,
                 status=status,
                 closed_at=utcnow() if remaining <= 0 else position.closed_at,
-                dust_shares=remaining if dust else position.dust_shares,
             )
             self.repo.add_trade(
                 market_id=market.market_id,

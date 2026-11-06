@@ -407,7 +407,7 @@ function renderPosition(p) {
     ["shares", p.shares],
     ["value now", usdc(p.value_now)],
     ["P&L", pnl === null ? "—" : (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDC" + (roi === null ? "" : " (" + (roi >= 0 ? "+" : "") + (roi * 100).toFixed(1) + "%)"), pnl !== null && pnl >= 0 ? "up" : "down"],
-    ["status", p.status, p.status === "DUST" ? "warn" : ""],
+    ["status", p.status],
     ["market", p.market_id],
   ]);
 }

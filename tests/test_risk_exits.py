@@ -270,16 +270,18 @@ def test_thin_book_holds_and_never_submits_infeasible_sell():
     assert decision.shadow_action is ExitAction.SELL
 
 
-def test_dust_is_held_to_resolution():
+def test_small_position_below_five_shares_is_still_sold():
+    # The 5-share minimum is a LIMIT-order rule; exits are market orders, so a 3-share position
+    # that hits its stop loss must be sold, not held to resolution.
     exits = HybridExitManager()
     market = make_market()
-    book = make_book(market.asset_id(Outcome.UP), bid="0.80", bid_size="100")
+    book = make_book(market.asset_id(Outcome.UP), bid="0.30", bid_size="100")
     decision = exits.evaluate(
         position=position(shares=Decimal("3"), cost_basis=Decimal("1.5")), market=market,
         up_book=book, down_book=None, probability=None, config=config(), now=START,
     )
-    assert decision.action is ExitAction.HOLD
-    assert decision.reason == "DUST_HOLD_TO_RESOLUTION"
+    assert decision.action is ExitAction.SELL
+    assert decision.shares == Decimal("3")
 
 
 def test_no_bid_holds_to_resolution():

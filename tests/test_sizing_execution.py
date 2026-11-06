@@ -8,7 +8,7 @@ import pytest
 
 from btc5m_bot.exchange.fees import FeeSchedule
 from btc5m_bot.execution.executor import ExecutionEngine
-from btc5m_bot.execution.feasibility import assess_dust, assess_exit_feasibility
+from btc5m_bot.execution.feasibility import assess_exit_feasibility
 from btc5m_bot.execution.journal import OrderJournal
 from btc5m_bot.execution.paper import PaperBroker
 from btc5m_bot.sizing import capital_compatibility, size_position
@@ -102,20 +102,19 @@ def test_capital_compatibility_reports_true_minimum():
 
 def test_exit_feasibility_requires_full_route_by_default():
     book = make_book("up", bid="0.40", bid_size="10")
-    feasible = assess_exit_feasibility(book, Decimal("10"), Decimal("5"), require_full_exit=True)
+    feasible = assess_exit_feasibility(book, Decimal("10"), require_full_exit=True)
     assert feasible.allowed and feasible.can_full_exit
-    thin = assess_exit_feasibility(book, Decimal("100"), Decimal("5"), require_full_exit=True)
+    thin = assess_exit_feasibility(book, Decimal("100"), require_full_exit=True)
     assert not thin.allowed
     assert "only 10/100" in thin.reasons[-2] or any("only 10" in r for r in thin.reasons)
 
 
-def test_exit_feasibility_below_minimum_is_dust():
+def test_exit_feasibility_has_no_minimum_share_size():
+    # Market SELLs have no 5-share minimum: 1.37 shares is a valid exit.
     book = make_book("up", bid="0.40", bid_size="4")
-    result = assess_exit_feasibility(book, Decimal("4"), Decimal("5"))
-    assert not result.allowed and result.dust_risk
-    assert assess_dust(Decimal("4.99"), Decimal("5"))[0] is True
-    assert assess_dust(Decimal("5"), Decimal("5"))[0] is False
-    assert assess_exit_feasibility(None, Decimal("10"), Decimal("5")).allowed is False
+    result = assess_exit_feasibility(book, Decimal("1.37"))
+    assert result.allowed and result.can_full_exit
+    assert assess_exit_feasibility(None, Decimal("10")).allowed is False
 
 
 def test_paper_broker_entry_fill_fees_and_duplicate_guard(clock, repo):

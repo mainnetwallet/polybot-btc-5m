@@ -871,17 +871,7 @@ class BotEngine:
                 extra={"edge": self._edge_dict(edge)},
             )
             return
-        if cfg.min_order_notional_usd is not None and sizing.shares < market.min_order_size:
-            # Dollar-sized entry below the SELL share minimum: the position can never be sold
-            # early, so it is held to resolution (DUST_HOLD_TO_RESOLUTION). Loss stays bounded by
-            # the order cost, which sizing already capped at the risk budget.
-            feasibility = assess_exit_feasibility(book, sizing.shares, Decimal(0), require_full_exit=False)
-            feasibility.allowed = True
-            feasibility.reasons.append(
-                f"{sizing.shares} shares below SELL minimum {market.min_order_size}: resolution-only exit"
-            )
-        else:
-            feasibility = assess_exit_feasibility(book, sizing.shares, market.min_order_size)
+        feasibility = assess_exit_feasibility(book, sizing.shares)
         if not feasibility.allowed:
             self._note(
                 now,
@@ -1570,8 +1560,8 @@ class BotEngine:
             min_sell = bool(
                 up_book
                 and down_book
-                and up_book.depth(Side.SELL) >= market.min_order_size
-                and down_book.depth(Side.SELL) >= market.min_order_size
+                and up_book.depth(Side.SELL) > 0
+                and down_book.depth(Side.SELL) > 0
             )
             protocol_ok = not market.validate() and market.version.value in {"v1", "v2"}
             rules_verified = str(rule_spec.get("confidence", "LOW")) in {"HIGH", "MEDIUM"} and bool(rule)

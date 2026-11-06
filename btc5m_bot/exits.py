@@ -3,7 +3,7 @@
 Precedence: emergency -> stop loss -> trailing stop -> take profit -> probability
 reversal -> momentum reversal -> liquidity deterioration -> hold-vs-sell EV ->
 time exit -> hold-to-resolution. Every SELL is checked for full exit feasibility
-first; DUST is never submitted as an invalid order.
+first. SELLs are market orders: no minimum share size, no dust rule.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Any
 from .config import RuntimeConfig
 from .db.models import PositionRow
 from .exchange.fees import FeeSchedule, taker_fee
-from .execution.feasibility import ExitFeasibility, assess_dust, assess_exit_feasibility
+from .execution.feasibility import ExitFeasibility, assess_exit_feasibility
 from .intelligence.features import FeatureSnapshot
 from .intelligence.probability import ProbabilityEstimate
 from .types import FeatureMode, MarketInfo, OrderBookSnapshot, Outcome, as_utc, utcnow
@@ -77,14 +77,6 @@ class HybridExitManager:
         feasibility: ExitFeasibility,
         **kwargs: Any,
     ) -> ExitDecision:
-        if position.status == "DUST" or position.shares < market.min_order_size:
-            return self._hold(
-                "DUST_HOLD_TO_RESOLUTION",
-                f"position {position.shares} below SELL minimum {market.min_order_size}; never submit an invalid SELL",
-                95,
-                feasibility=feasibility,
-                **kwargs,
-            )
         if not feasibility.allowed or not feasibility.can_full_exit or book is None or book.best_bid is None:
             return self._hold(
                 "SELL_NOT_FEASIBLE",
@@ -139,12 +131,8 @@ class HybridExitManager:
         feasibility = assess_exit_feasibility(
             book,
             position.shares,
-            market.min_order_size,
             require_full_exit=True,
         )
-        dust, dust_reason = assess_dust(position.shares, market.min_order_size)
-        if position.status == "DUST" or dust:
-            return self._hold("DUST_HOLD_TO_RESOLUTION", dust_reason, 95, feasibility=feasibility)
 
         if book is None or book.best_bid is None:
             return self._hold(

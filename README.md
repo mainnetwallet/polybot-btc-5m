@@ -386,7 +386,7 @@ acknowledgement window.
 - Write-ahead order journal with idempotency keys
 - FOK/FAK book walking with slippage, fees, and partial-fill accounting
 - Exchange `UNKNOWN` results are never blindly retried
-- Partial fills and DUST positions are held to resolution when selling is infeasible
+- Exits are market (FOK) SELLs: the 5-share minimum is a LIMIT-order rule only, so any position size can be sold early
 - Every entry and exit decision is logged with a reason code
 
 ### Data

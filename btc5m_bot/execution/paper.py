@@ -32,7 +32,6 @@ class PaperPosition:
     entry_fee: Decimal
     cost_basis: Decimal
     opened_at: datetime
-    dust: bool = False
 
 
 @dataclass
@@ -167,7 +166,6 @@ class PaperBroker:
             if existing is not None:
                 return OrderResult(intent.client_order_id, OrderStatus.REJECTED, error_code="DUPLICATE_ENTRY", error_message="position already open")
             self.cash -= cost
-            dust = filled < market.min_order_size
             self.positions[intent.asset_id] = PaperPosition(
                 market_id=intent.market_id,
                 condition_id=intent.condition_id,
@@ -178,7 +176,6 @@ class PaperBroker:
                 entry_fee=fee,
                 cost_basis=cost,
                 opened_at=self.clock.now(),
-                dust=dust,
             )
             status = OrderStatus.PARTIAL if short or (not by_usdc and filled < intent.shares) else OrderStatus.FILLED
             result = OrderResult(
@@ -222,8 +219,6 @@ class PaperBroker:
         pos.cost_basis -= allocated_cost
         if pos.shares <= 0:
             self.positions.pop(pos.asset_id, None)
-        elif pos.shares < market.min_order_size:
-            pos.dust = True
         status = OrderStatus.FILLED if filled >= sellable else OrderStatus.PARTIAL
         result = OrderResult(
             client_order_id=intent.client_order_id,
