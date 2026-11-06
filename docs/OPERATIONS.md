@@ -241,6 +241,12 @@ gate/protective checks fail. The heartbeat is key-wide: a timeout cancels all or
 the API key. Investigate the network and credentials before restarting. Never arm the
 heartbeat for testing outside an authorized LIVE activation.
 
+The worker re-checks the whole heartbeat safety configuration (enabled flag, credentials,
+dedicated-key confirmation, interval and lease window, recorded arm test, LIVE activation)
+before **every** send, not only at start-up. If any check fails it skips the send and records
+the reason under `heartbeat_skipped`; the platform deadline then cancels resting orders, the
+same fail-safe as a revoked LIVE session.
+
 ### Crash loop
 
 More than five child restarts in an hour stops the supervisor. Inspect `logs\` and

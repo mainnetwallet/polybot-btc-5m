@@ -181,6 +181,26 @@ class HeartbeatWorker:
             )
             log.warning("heartbeat skipped: %s", detail)
             return
+        # The first accepted heartbeat arms a key-wide cancel-all that cannot be undone, and the
+        # worker is a separate process that may have started long before this send. Re-check the
+        # whole safety configuration every time instead of trusting what held at start-up.
+        # ``live_allowed`` already covers "LIVE mode" and "activation active".
+        live = self.live_allowed()
+        check = validate_heartbeat_configuration(
+            self.settings,
+            live_mode=live,
+            activation_active=live,
+            dedicated_key_confirmed=self.settings.heartbeat_dedicated_key_confirmed,
+            test_recorded=bool(self.repo.get_state("heartbeat_test", {}).get("ok")),
+        )
+        if not check.ok:
+            reason = "; ".join(check.failures)
+            self.repo.set_state(
+                "heartbeat_skipped",
+                {"at": as_utc(self.clock.now()).isoformat(), "reason": f"safety configuration: {reason}"},
+            )
+            log.warning("heartbeat skipped: safety configuration failed: %s", reason)
+            return
         heartbeat_id = self.repo.get_heartbeat_state().heartbeat_id or ""
         self._record_attempt()
         try:
