@@ -227,8 +227,8 @@ class RuntimeConfig(BaseModel):
     @field_validator("momentum_reversal_z")
     @classmethod
     def _momentum_z(cls, v: Decimal) -> Decimal:
-        if v < 0:
-            raise ValueError("momentum_reversal_z must be non-negative")
+        if v < 0 or v > 10:
+            raise ValueError("momentum_reversal_z must be between 0 and 10")
         return v
 
     @field_validator("liquidity_exit_depth_drop_pct")
@@ -264,6 +264,73 @@ class RuntimeConfig(BaseModel):
     def _tp_max(cls, v: Decimal) -> Decimal:
         if v < 1:
             raise ValueError("dynamic_tp_max_multiple must be >= 1")
+        return v
+
+    # ---- range checks for the remaining numeric tunables (every one is dashboard-writable) ----
+    @field_validator("cooldown_minutes")
+    @classmethod
+    def _cooldown(cls, v: int) -> int:
+        # 0 would silently disable the loss-streak protection.
+        if v < 1 or v > 1440:
+            raise ValueError("cooldown_minutes must be between 1 and 1440")
+        return v
+
+    @field_validator("trailing_stop_pct")
+    @classmethod
+    def _trailing(cls, v: Decimal) -> Decimal:
+        if not (Decimal(0) < v < Decimal(1)):
+            raise ValueError("trailing_stop_pct must be in (0, 1)")
+        return v
+
+    @field_validator("min_depth_multiple")
+    @classmethod
+    def _depth_multiple(cls, v: Decimal) -> Decimal:
+        if v < 1 or v > 100:
+            raise ValueError("min_depth_multiple must be between 1 and 100 (book depth must cover the order)")
+        return v
+
+    @field_validator("min_hold_seconds_before_reversal", "time_exit_seconds_before_end")
+    @classmethod
+    def _seconds_within_window(cls, v: int, info: Any) -> int:
+        if v < 0 or v > 300:
+            raise ValueError(f"{info.field_name} must be between 0 and 300 seconds (a market lasts 300s)")
+        return v
+
+    @field_validator("min_oracle_coverage_seconds")
+    @classmethod
+    def _oracle_coverage(cls, v: int) -> int:
+        if v < 1 or v > 300:
+            raise ValueError("min_oracle_coverage_seconds must be between 1 and 300")
+        return v
+
+    @field_validator("live_validation_min_markets", "paper_validation_min_trades")
+    @classmethod
+    def _validation_minimums(cls, v: int, info: Any) -> int:
+        if v < 1:
+            raise ValueError(f"{info.field_name} must be at least 1")
+        return v
+
+    @field_validator("max_data_age_ms", "max_book_age_ms", "max_latency_p95_ms")
+    @classmethod
+    def _age_limits(cls, v: int, info: Any) -> int:
+        if v < 1 or v > 60_000:
+            raise ValueError(f"{info.field_name} must be between 1 and 60000 ms")
+        return v
+
+    @field_validator("taker_delay_ms")
+    @classmethod
+    def _taker_delay(cls, v: int) -> int:
+        if v < 0 or v > 5000:
+            raise ValueError("taker_delay_ms must be between 0 and 5000")
+        return v
+
+    @field_validator("max_spread", "max_slippage", "min_net_edge", "fee_buffer")
+    @classmethod
+    def _price_ratio_upper(cls, v: Decimal, info: Any) -> Decimal:
+        # Prices live in [0, 1], so a spread/slippage/edge/fee above 1 is meaningless.
+        limit = Decimal(1)
+        if v > limit or (info.field_name in {"min_net_edge", "fee_buffer"} and v >= limit):
+            raise ValueError(f"{info.field_name} must be below 1 (prices are in [0, 1])")
         return v
 
     @field_validator("feature_modes")

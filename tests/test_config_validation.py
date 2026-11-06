@@ -1,0 +1,89 @@
+"""Range validation for every numeric RuntimeConfig tunable (dashboard-writable)."""
+from __future__ import annotations
+
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from btc5m_bot.api.app import CONFIG_WRITABLE
+from btc5m_bot.config import RuntimeConfig
+
+ROOT = Path(__file__).resolve().parents[1]
+
+BAD_VALUES = [
+    ("cooldown_minutes", 0),
+    ("cooldown_minutes", -5),
+    ("cooldown_minutes", 1441),
+    ("trailing_stop_pct", "0"),
+    ("trailing_stop_pct", "-0.1"),
+    ("trailing_stop_pct", "1"),
+    ("min_depth_multiple", "0"),
+    ("min_depth_multiple", "0.5"),
+    ("min_depth_multiple", "101"),
+    ("min_hold_seconds_before_reversal", -1),
+    ("min_hold_seconds_before_reversal", 301),
+    ("time_exit_seconds_before_end", -1),
+    ("time_exit_seconds_before_end", 301),
+    ("min_oracle_coverage_seconds", 0),
+    ("min_oracle_coverage_seconds", 301),
+    ("live_validation_min_markets", 0),
+    ("paper_validation_min_trades", 0),
+    ("max_data_age_ms", 0),
+    ("max_data_age_ms", 60001),
+    ("max_book_age_ms", 0),
+    ("max_book_age_ms", 60001),
+    ("max_latency_p95_ms", 0),
+    ("max_latency_p95_ms", 60001),
+    ("taker_delay_ms", -1),
+    ("taker_delay_ms", 5001),
+    ("max_spread", "1.5"),
+    ("max_slippage", "1.5"),
+    ("min_net_edge", "1"),
+    ("fee_buffer", "1"),
+    ("momentum_reversal_z", "-1"),
+    ("momentum_reversal_z", "11"),
+]
+
+
+@pytest.mark.parametrize(("field", "value"), BAD_VALUES)
+def test_out_of_range_tunables_are_rejected(field, value):
+    with pytest.raises(ValidationError):
+        RuntimeConfig.model_validate({field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cooldown_minutes", 1),
+        ("cooldown_minutes", 1440),
+        ("trailing_stop_pct", "0.5"),
+        ("min_depth_multiple", "1"),
+        ("min_hold_seconds_before_reversal", 0),
+        ("time_exit_seconds_before_end", 0),
+        ("min_oracle_coverage_seconds", 1),
+        ("taker_delay_ms", 0),
+        ("max_spread", "0.05"),
+        ("max_slippage", "0"),
+    ],
+)
+def test_sane_boundary_values_are_accepted(field, value):
+    RuntimeConfig.model_validate({field: value})
+
+
+def test_defaults_are_valid():
+    cfg = RuntimeConfig()
+    assert cfg.cooldown_minutes >= 1
+
+
+def test_config_example_json_validates_and_is_complete():
+    raw = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+    cfg = RuntimeConfig.model_validate(raw)
+    assert "auto_approve_rules" in raw
+    assert cfg.auto_approve_rules == raw["auto_approve_rules"]
+
+
+def test_every_writable_key_is_a_real_field():
+    assert CONFIG_WRITABLE <= set(RuntimeConfig.model_fields)

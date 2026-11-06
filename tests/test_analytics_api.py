@@ -362,3 +362,14 @@ def test_activity_clear_deletes_on_click_without_typed_phrase(client, repo):
     ok = test_client.post("/api/activity/clear", json={"action": "decisions"}, headers=headers)
     assert ok.status_code == 200 and ok.json()["removed"] == 1
     assert repo.recent_decisions(10) == []
+
+
+def test_config_api_returns_400_for_out_of_range_tunables(client):
+    test_client, _, store = client
+    headers = login(test_client)
+    before = store.snapshot().cooldown_minutes
+    for patch in ({"cooldown_minutes": 0}, {"trailing_stop_pct": "1.5"}, {"min_oracle_coverage_seconds": 0}):
+        response = test_client.post("/api/config", json={"patch": patch}, headers=headers)
+        assert response.status_code == 400, patch
+        assert "invalid configuration" in response.json()["detail"]
+    assert store.snapshot().cooldown_minutes == before
