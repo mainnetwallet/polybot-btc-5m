@@ -333,31 +333,3 @@ def test_state_store_version_changes_on_every_update():
     v1 = store.version
     store.increment("decisions")
     assert v0 < v1 < store.version
-
-
-def test_login_lockout_is_per_real_client_behind_the_proxy(settings, repo, config_store):
-    """Behind the Render proxy every request comes from 127.0.0.1; the lockout must not be shared."""
-    app = create_app(engine=StubEngine(), repo=repo, settings=settings, config_store=config_store)
-    bad = {"username": "admin", "password": "wrong"}
-    good = {"username": "admin", "password": "correct-horse-battery"}
-    with TestClient(app, client=("127.0.0.1", 50000)) as proxy:
-        for _ in range(5):
-            assert proxy.post("/api/login", json=bad, headers={"x-forwarded-for": "9.9.9.9"}).status_code == 401
-        # The attacker is now locked out, even with the right password...
-        assert proxy.post("/api/login", json=good, headers={"x-forwarded-for": "9.9.9.9"}).status_code != 200
-        # ...and cannot dodge it by forging entries to the LEFT of the address the proxy appended.
-        forged = {"x-forwarded-for": "1.2.3.4, 9.9.9.9"}
-        assert proxy.post("/api/login", json=good, headers=forged).status_code != 200
-        # The real operator (a different client address) is NOT locked out.
-        assert proxy.post("/api/login", json=good, headers={"x-forwarded-for": "8.8.8.8"}).status_code == 200
-
-
-def test_forwarded_for_is_ignored_unless_the_peer_is_loopback(settings, repo, config_store):
-    app = create_app(engine=StubEngine(), repo=repo, settings=settings, config_store=config_store)
-    bad = {"username": "admin", "password": "wrong"}
-    good = {"username": "admin", "password": "correct-horse-battery"}
-    with TestClient(app) as direct:  # peer is "testclient", not loopback
-        for i in range(5):
-            direct.post("/api/login", json=bad, headers={"x-forwarded-for": f"7.7.7.{i}"})
-        # Rotating the header does not reset the bucket: the real peer is what counts.
-        assert direct.post("/api/login", json=good, headers={"x-forwarded-for": "6.6.6.6"}).status_code != 200

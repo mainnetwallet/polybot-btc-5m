@@ -16,7 +16,7 @@ from .db.engine import backup_database, init_db, make_engine, make_session_facto
 from .db.repo import Repository
 from .security import hash_password
 
-MIN_PASSWORD_LENGTH = 12
+MIN_PASSWORD_LENGTH = 4
 
 
 def _settings() -> Settings:

@@ -243,11 +243,9 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
 
 - **No persistent disk.** The SQLite database, approved rules, paper trades, recordings and
   `runtime.json` live under `/tmp/polybot` and are lost on every restart, redeploy and spin-down.
-- **No Shell or SSH.** `approve-rule`, `status` and `backup` cannot be run from a terminal. Use the
-  dashboard instead: **Rules → Approve** for the resolution rule and **Settings** for `capital_usd`
-  and the Trading ON/OFF switch. Because nothing is persisted, repeat these after every restart.
-  Until a rule is approved, capital is set and Trading is ON, the bot records NO TRADE: it collects
-  data and reports health but does not paper-trade.
+- **No Shell or SSH, and no dashboard.** `approve-rule`, `status` and `backup` cannot be run, and
+  `capital_usd` cannot be set. Until a rule is approved and capital is set the bot records NO TRADE:
+  it collects data and reports health but does not paper-trade.
 - **Spin-down and hours.** An idle service spins down after 15 minutes without inbound traffic. An
   UptimeRobot monitor keeps it awake, but the 750 free instance hours per month are shared by all
   free web services in the workspace, and one always-on service uses about 730 of them. When the
@@ -385,17 +383,6 @@ Parquet datasets under `data\parquet\<dataset>\date=YYYY-MM-DD\`:
 
 ---
 
-## Order sizing and minimums
-
-Entries are sized in **dollars**: `capital x 2%` is the risk budget and the order must be at least
-`min_order_notional_usd` (default **$1**, the Polymarket minimum for marketable FOK/FAK BUY orders).
-The 5-share minimum applies to resting limit orders and no longer gates entry. Size is never raised to
-reach the minimum: if the budget cannot afford $1 the bot records `BELOW_MIN_ORDER`. A position below
-the SELL share minimum cannot be sold early, so it is held to resolution (`DUST_HOLD_TO_RESOLUTION`,
-no stop-loss or take-profit). Set `min_order_notional_usd` to `null` to restore share minimums.
-
----
-
 ## Configuration
 
 - **Secrets and infrastructure:** `.env` (never committed)
@@ -438,8 +425,8 @@ dynamic take-profit, momentum-reversal and liquidity-deterioration rules, risk p
 heartbeat/recovery/gate, analytics, API auth/CSRF, Parquet/DuckDB, and an
 offline engine iteration using the fake exchange adapter.
 
-Actual last local result: **194 passed, 0 failed, 0 errors, 0 skipped** (Python 3.12,
-Linux, 25s). This number is recorded from the real run; it is not a profitability
+Actual last local result: **137 passed, 0 failed, 0 errors, 0 skipped** (Python 3.11,
+Windows, 24.3s). This number is recorded from the real run; it is not a profitability
 claim. See [docs/VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md) for scope and limitations.
 
 ---

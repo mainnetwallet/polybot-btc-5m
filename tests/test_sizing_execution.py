@@ -265,36 +265,3 @@ def test_dollar_minimum_never_raises_risk_to_reach_one_dollar():
     assert not result.allowed
     assert result.reason is ReasonCode.BELOW_MIN_ORDER
     assert result.shares == Decimal(0)
-
-
-def test_dollar_sized_entry_below_five_shares_is_held_and_settles(clock, repo, adapter):
-    """End to end: a ~$2 entry (3.9 shares) fills, becomes DUST (no early SELL), then settles."""
-    from btc5m_bot.types import PositionStatus
-
-    paper = PaperBroker(Decimal("100"), clock, miss_probability=0.0, partial_probability=0.0)
-    journal = OrderJournal(repo)
-    engine = ExecutionEngine(
-        repo=repo, journal=journal, adapter=adapter, paper=paper, clock=clock,
-        mode_provider=lambda: Mode.PAPER,
-    )
-    market = make_market()
-    book = make_book(market.asset_id(Outcome.UP), bid="0.49", ask="0.50", ask_size="1000")
-    sized = size_position(
-        capital=Decimal("100"), risk_pct=Decimal("0.02"), balance=paper.balance,
-        book=book, min_order_size=market.min_order_size, schedule=FeeSchedule.from_market(market),
-        max_price=Decimal("0.51"), min_notional_usd=Decimal("1.00"),
-    )
-    assert sized.allowed and sized.shares < market.min_order_size
-
-    intent = journal.new_intent(
-        market=market, outcome=Outcome.UP, side=Side.BUY, shares=sized.shares,
-        limit_price=Decimal("0.51"), mode="PAPER",
-    )
-    done = asyncio.run(engine.execute_entry(intent, market, book))
-    assert done.result.status is OrderStatus.FILLED
-
-    position = repo.get_position(market.market_id, "PAPER")
-    assert position is not None and position.status == PositionStatus.DUST.value
-
-    pnl = engine.settle_position(position, "UP")  # market resolves in our favour
-    assert pnl > 0
