@@ -29,6 +29,7 @@ def trade(pnl, *, kind="SETTLEMENT", price="0.50", shares="10", fee="0.05", day=
         market_id=f"mkt-{pnl}-{day}",
         outcome="UP",
         side="SETTLE",
+        mode="PAPER",
     )
 
 
