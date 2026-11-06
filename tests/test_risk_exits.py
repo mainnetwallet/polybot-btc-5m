@@ -19,6 +19,7 @@ CAPITAL = Decimal("1000")
 
 
 def config(**overrides) -> RuntimeConfig:
+    overrides.setdefault("daily_loss_limit_usd", Decimal("40"))
     return RuntimeConfig(capital_usd=CAPITAL, **overrides)
 
 
@@ -130,6 +131,25 @@ def test_profit_lock_stops_trading_but_is_not_a_loss(clock, repo):
         planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
     )
     assert not allowed and reason is ReasonCode.PROFIT_LOCK
+
+
+def test_daily_loss_limit_is_a_fixed_usdc_amount(clock, repo):
+    # Limit is 1.50 USDC no matter the capital (1000): realized -1.50 locks the day.
+    cfg = config(daily_loss_limit_usd=Decimal("1.50"))
+    risk = manager(clock, repo, cfg)
+    assert risk.daily_loss_limit() == Decimal("1.50")
+    risk.record_result(realized_pnl=Decimal("-0.80"), market_id="a", mode=Mode.PAPER)
+    allowed, reason, _ = risk.pre_trade_check(
+        market_id="b", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
+        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+    )
+    assert allowed or reason is not ReasonCode.DAILY_LOSS_LIMIT
+    risk.record_result(realized_pnl=Decimal("-0.70"), market_id="c", mode=Mode.PAPER)
+    allowed, reason, _ = risk.pre_trade_check(
+        market_id="d", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
+        planned_cost=Decimal("1"), balance=CAPITAL, recovery_ready=True,
+    )
+    assert not allowed and reason in {ReasonCode.DAILY_LOSS_LIMIT, ReasonCode.COOLDOWN}
 
 
 def test_two_consecutive_losses_start_cooldown(clock, repo):

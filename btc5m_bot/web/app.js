@@ -917,7 +917,7 @@ async function loadTab(name) {
       $("cfg-capfrombal").checked = !!c.capital_from_balance;
       $("cfg-tradesize").value = text(c.trade_size_usd, "");
       $("cfg-risk").value = (Number(c.risk_per_trade_pct) * 100).toFixed(2);
-      $("cfg-daily").value = (Number(c.daily_loss_limit_pct) * 100).toFixed(2);
+      $("cfg-daily").value = text(c.daily_loss_limit_usd, "");
       $("cfg-prob").value = c.min_probability;
       $("cfg-edge").value = c.min_net_edge;
       $("cfg-spread").value = c.max_spread;
@@ -964,7 +964,7 @@ $("settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const patch = {
     risk_per_trade_pct: (Number($("cfg-risk").value) / 100).toFixed(4),
-    daily_loss_limit_pct: (Number($("cfg-daily").value) / 100).toFixed(4),
+    daily_loss_limit_usd: Number($("cfg-daily").value).toFixed(2),
     min_probability: $("cfg-prob").value,
     min_net_edge: $("cfg-edge").value,
     max_spread: $("cfg-spread").value,

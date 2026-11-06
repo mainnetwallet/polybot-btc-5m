@@ -35,7 +35,6 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     HARD_RISK_PER_TRADE: ClassVar[Decimal] = Decimal("0.02")
-    HARD_DAILY_LOSS: ClassVar[Decimal] = Decimal("0.04")
     HARD_MAX_POSITIONS: ClassVar[int] = 1
     HARD_MAX_ENTRIES_PER_MARKET: ClassVar[int] = 1
     HARD_MAX_CONSECUTIVE_LOSSES: ClassVar[int] = 2
@@ -48,7 +47,8 @@ class RuntimeConfig(BaseModel):
     # LIVE only: keep capital_usd equal to the real wallet balance (refreshed while flat, before the
     # day's first trade). PAPER keeps the capital you set as the virtual starting bankroll.
     capital_from_balance: bool = True
-    daily_loss_limit_pct: Decimal = Decimal("0.04")
+    # Daily loss limit as a fixed USDC amount (trading locks for the day once realized P&L <= -this).
+    daily_loss_limit_usd: Decimal = Decimal("1")
     daily_profit_lock_pct: Decimal | None = None
     max_consecutive_losses: int = 2
     cooldown_minutes: int = 15
@@ -144,11 +144,19 @@ class RuntimeConfig(BaseModel):
             raise HardLimitError("risk_per_trade_pct must be > 0 and <= 0.02 (immutable 2% cap)")
         return v
 
-    @field_validator("daily_loss_limit_pct")
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_daily_pct(cls, data: Any) -> Any:
+        # Older runtime.json files stored the daily loss limit as a % of capital; it is now USDC.
+        if isinstance(data, dict) and "daily_loss_limit_pct" in data:
+            data = {k: v for k, v in data.items() if k != "daily_loss_limit_pct"}
+        return data
+
+    @field_validator("daily_loss_limit_usd")
     @classmethod
     def _daily_limit(cls, v: Decimal) -> Decimal:
-        if v <= 0 or v > cls.HARD_DAILY_LOSS:
-            raise HardLimitError("daily_loss_limit_pct must be > 0 and <= 0.04 (immutable 4% cap)")
+        if v <= 0:
+            raise ValueError("daily_loss_limit_usd must be a positive USDC amount")
         return v
 
     @field_validator("daily_profit_lock_pct")
@@ -328,8 +336,8 @@ class Settings(BaseSettings):
     # Persistent defaults. On hosts without a persistent disk (Render free) runtime.json and the
     # database are wiped on every restart, so capital and rule approvals would have to be set
     # again by hand. These values are re-applied on every start instead.
-    # POLYBOT_DEFAULT_CAPITAL_USD (default 1000): used only while runtime.json has no capital_usd.
-    default_capital_usd: Decimal | None = Field(default=Decimal("1000"), gt=0)
+    # POLYBOT_DEFAULT_CAPITAL_USD (default 5): used only while runtime.json has no capital_usd.
+    default_capital_usd: Decimal | None = Field(default=Decimal("5"), gt=0)
     # POLYBOT_APPROVED_RULE_FINGERPRINTS: comma separated fingerprints that are approved as soon
     # as they are seen, in any mode.
     approved_rule_fingerprints: str | None = None

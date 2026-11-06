@@ -118,8 +118,8 @@ Decision reason codes explain every NO TRADE. Common ones:
    .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
    ```
 4. Set `capital_usd` in the dashboard or `config\runtime.json`. This is the allocated
-   capital, not the wallet balance. It is the basis for the 2% planned-loss cap and the
-   4% daily-loss cap.
+   capital, not the wallet balance. It is the basis for the 2% planned-loss cap. The daily
+   loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
 5. Do not judge the strategy from a handful of trades. The statistical validation gate
    requires real recorded outcomes; it fails honestly on an empty database.
 

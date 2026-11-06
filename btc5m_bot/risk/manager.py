@@ -73,8 +73,7 @@ class RiskManager:
         return capital if capital is not None and capital > 0 else None
 
     def daily_loss_limit(self) -> Decimal:
-        capital = self.capital()
-        return capital * self._cfg().daily_loss_limit_pct if capital else Decimal(0)
+        return self._cfg().daily_loss_limit_usd
 
     def daily_profit_target(self) -> Decimal | None:
         capital = self.capital()
@@ -103,7 +102,7 @@ class RiskManager:
         day = self.repo.get_risk_day(self._today(now))
         state = self.repo.get_risk_state()
         summary = self.ledger.summary(mode.value, balance)
-        limit = capital * cfg.daily_loss_limit_pct if capital else Decimal(0)
+        limit = cfg.daily_loss_limit_usd
         target = capital * cfg.daily_profit_lock_pct if (capital and cfg.daily_profit_lock_pct) else None
 
         reason = ReasonCode.OK
@@ -174,7 +173,7 @@ class RiskManager:
             if day.profit_lock_triggered:
                 return False, ReasonCode.PROFIT_LOCK, "daily profit lock reached; trading stopped for the day"
             return False, ReasonCode.DAILY_LOSS_LIMIT, "daily loss limit reached; trading stopped for the day"
-        limit = capital * cfg.daily_loss_limit_pct
+        limit = cfg.daily_loss_limit_usd
         if day.realized_pnl <= -limit:
             self._lock_day(day.trading_day, "DAILY_LOSS_LIMIT", {"realized_pnl": str(day.realized_pnl), "limit": str(limit)})
             return False, ReasonCode.DAILY_LOSS_LIMIT, f"daily loss {day.realized_pnl} reached limit {-limit}"
@@ -250,7 +249,7 @@ class RiskManager:
         locked = day.locked
         profit_locked = day.profit_lock_triggered
         if capital is not None:
-            loss_limit = capital * cfg.daily_loss_limit_pct
+            loss_limit = cfg.daily_loss_limit_usd
             if day_pnl <= -loss_limit and not locked:
                 locked = True
                 events.append("DAILY_LOSS_LIMIT")

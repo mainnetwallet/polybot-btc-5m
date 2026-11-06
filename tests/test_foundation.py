@@ -16,8 +16,8 @@ from btc5m_bot.exchange.fees import FeeSchedule, maker_fee, taker_fee
 def test_risk_limits_are_immutable():
     with pytest.raises(HardLimitError):
         RuntimeConfig(risk_per_trade_pct=Decimal("0.021"))
-    with pytest.raises(HardLimitError):
-        RuntimeConfig(daily_loss_limit_pct=Decimal("0.041"))
+    with pytest.raises(ValueError):
+        RuntimeConfig(daily_loss_limit_usd=Decimal("0"))
     with pytest.raises(HardLimitError):
         RuntimeConfig(max_active_positions=2)
     with pytest.raises(HardLimitError):
@@ -35,7 +35,7 @@ def test_defaults_are_conservative():
     assert cfg.mode is Mode.PAPER
     assert cfg.capital_usd is None
     assert cfg.risk_per_trade_pct == Decimal("0.02")
-    assert cfg.daily_loss_limit_pct == Decimal("0.04")
+    assert cfg.daily_loss_limit_usd == Decimal("1")
     assert cfg.require_rules_approval is True
     assert cfg.max_active_positions == 1
 

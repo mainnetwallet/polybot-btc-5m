@@ -256,7 +256,7 @@
               <label>LIVE: capital = wallet balance<input id="cfg-capfrombal" type="checkbox"></label>
               <label>Trade size per buy (USDC, empty = use risk %)<input id="cfg-tradesize" type="number" step="0.01" min="0"></label>
               <label>Risk per trade (%)<input id="cfg-risk" type="number" step="0.001" min="0" max="2"></label>
-              <label>Daily loss limit (%)<input id="cfg-daily" type="number" step="0.001" min="0" max="4"></label>
+              <label>Daily loss limit (USDC)<input id="cfg-daily" type="number" step="0.01" min="0.01"></label>
             </div></fieldset>
             <fieldset class="group"><legend>Entry</legend><div class="fields">
               <label>Strategy<select id="cfg-strategy"><option value="momentum">momentum</option><option value="reversal">reversal</option><option value="breakout">breakout</option><option value="trend_confirmation">trend_confirmation</option></select></label>

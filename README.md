@@ -14,7 +14,7 @@ passes a strict 23-condition gate and types an explicit confirmation phrase.
 | Limit | Value |
 |---|---|
 | Planned loss per trade | max **2%** of allocated capital, assuming a full loss even with a stop |
-| Daily loss limit | max **4%** |
+| Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1) |
 | Consecutive losses before cooldown | max **2**, then a 15-minute cooldown |
 | Concurrent positions | **1** |
 | Entries per market | **1** |
@@ -109,8 +109,8 @@ Edit `config\runtime.json` and replace `"capital_usd": null` with a number, for 
 "capital_usd": 100
 ```
 
-This is the capital the risk limits are computed from (2% planned loss per trade, 4% daily
-loss), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` and does not trade.
+This is the capital the risk limits are computed from (2% planned loss per trade; the daily loss
+limit is a fixed USDC amount, `daily_loss_limit_usd`), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` and does not trade.
 
 ### 6. Start the bot
 
@@ -257,7 +257,7 @@ variable is needed. To change the behaviour, set these (all optional):
 
 | Variable | Default | Effect |
 |---|---|---|
-| `POLYBOT_DEFAULT_CAPITAL_USD` | `1000` | capital applied while `runtime.json` has none |
+| `POLYBOT_DEFAULT_CAPITAL_USD` | `5` | capital applied while `runtime.json` has none |
 | `POLYBOT_AUTO_APPROVE_RULES` | `true` | approves every resolution rule, **PAPER mode only** (never in LIVE) |
 | `POLYBOT_APPROVED_RULE_FINGERPRINTS` | empty | fingerprints approved in any mode (use this for LIVE) |
 
@@ -285,7 +285,7 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    Position size is derived from `capital × 2% / worst-case unit cost`; it is never
    increased to satisfy the minimum order size.
 
-   **Capital vs balance:** `capital_usd` is the bankroll number the daily loss limit is based on;
+   **Capital vs balance:** `capital_usd` is the bankroll number the per-trade risk is based on;
    the balance is the actual cash (PAPER: virtual cash, LIVE: wallet USDC). In **LIVE**,
    `capital_from_balance` (default `true`) keeps `capital_usd` equal to the wallet balance,
    refreshed only while the bot is flat and before the day's first trade. In PAPER, capital is

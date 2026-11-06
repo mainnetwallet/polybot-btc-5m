@@ -1474,7 +1474,7 @@ class BotEngine:
                 "capital_usd": _dec(cfg.capital_usd),
                 "risk_per_trade_pct": _dec(cfg.risk_per_trade_pct),
                 "trade_size_usd": _dec(cfg.trade_size_usd),
-                "daily_loss_limit_pct": _dec(cfg.daily_loss_limit_pct),
+                "daily_loss_limit_usd": _dec(cfg.daily_loss_limit_usd),
                 "max_consecutive_losses": cfg.max_consecutive_losses,
                 "cooldown_minutes": cfg.cooldown_minutes,
                 "max_active_positions": cfg.max_active_positions,

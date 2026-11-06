@@ -74,7 +74,7 @@ before signing anything.
 ## Trading safety
 
 - 2% planned-loss cap per trade, computed as a full loss even when a stop is planned.
-- 4% daily loss limit, profit lock option, two-loss cooldown, one position, one entry per
+- Daily loss limit (fixed USDC amount), profit lock option, two-loss cooldown, one position, one entry per
   market, hard 120-second entry window.
 - Position size is never increased to satisfy exchange minimums; the order is skipped.
 - Chainlink only for resolution. Pyth/spot text is rejected as a substitute. Unknown

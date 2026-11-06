@@ -34,7 +34,7 @@ CONFIG_WRITABLE = {
     "capital_from_balance",
     "risk_per_trade_pct",
     "trade_size_usd",
-    "daily_loss_limit_pct",
+    "daily_loss_limit_usd",
     "daily_profit_lock_pct",
     "max_consecutive_losses",
     "cooldown_minutes",
