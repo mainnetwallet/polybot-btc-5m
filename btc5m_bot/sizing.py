@@ -80,7 +80,14 @@ def size_position(
     max_price: Decimal | None = None,
     share_step: Decimal = SHARE_STEP,
     extra_risk_cap: Decimal | None = None,
+    min_notional_usd: Decimal | None = None,
 ) -> SizingResult:
+    """Size a BUY inside the risk budget.
+
+    ``min_notional_usd`` switches the entry minimum from a share count to a dollar amount
+    (marketable BUYs are denominated in collateral). The size is still never raised to meet it:
+    if the risk budget cannot afford the dollar minimum the result is BELOW_MIN_ORDER.
+    """
     if capital is None or capital <= 0:
         return SizingResult(False, ReasonCode.CAPITAL_UNSET, "allocated capital is not configured")
     if balance is None:
@@ -109,12 +116,15 @@ def size_position(
     depth_shares = sum((l.size for l in depth_levels), Decimal(0))
     max_by_depth = floor_to_step(depth_shares, share_step)
 
+    # Dollar-minimum mode: the share-count minimum no longer gates entry (only a positive size does).
+    floor_shares = share_step if min_notional_usd is not None else min_order_size
+
     shares = min(max_by_risk, max_by_balance, max_by_depth)
-    if shares < min_order_size:
+    if shares < floor_shares:
         return SizingResult(
             False,
             ReasonCode.BELOW_MIN_ORDER,
-            f"risk-valid size {shares} below market minimum {min_order_size}; risk is never raised to satisfy minimums",
+            f"risk-valid size {shares} below market minimum {floor_shares}; risk is never raised to satisfy minimums",
             risk_budget=risk_budget,
             max_by_risk=max_by_risk,
             max_by_balance=max_by_balance,
@@ -125,11 +135,11 @@ def size_position(
     # Walk the actual book and shrink until cost fits. Round DOWN only.
     for _ in range(200):
         shares = floor_to_step(shares, share_step)
-        if shares < min_order_size:
+        if shares < floor_shares:
             break
         filled, notional = _walk_limited(book, shares, max_price)
         shares = min(shares, floor_to_step(filled, share_step))
-        if shares < min_order_size:
+        if shares < floor_shares:
             break
         filled, notional = _walk_limited(book, shares, max_price)
         if filled < shares:
@@ -139,6 +149,19 @@ def size_position(
         fee = taker_fee(shares, avg, schedule)
         cost = notional + fee + fee_buffer * shares
         if cost <= max_cost:
+            if min_notional_usd is not None and notional < min_notional_usd:
+                return SizingResult(
+                    False,
+                    ReasonCode.BELOW_MIN_ORDER,
+                    f"order ${notional:.4f} below ${min_notional_usd} minimum; "
+                    f"risk budget ${risk_budget:.4f} is never raised to satisfy minimums",
+                    risk_budget=risk_budget,
+                    max_by_risk=max_by_risk,
+                    max_by_balance=max_by_balance,
+                    max_by_depth=max_by_depth,
+                    capital_required=max_cost,
+                    min_order_cost=min_notional_usd,
+                )
             worst = cost
             return SizingResult(
                 True,
@@ -163,7 +186,11 @@ def size_position(
             reduce = share_step
         shares -= reduce
 
-    min_cost = min_order_size * (book.best_ask + taker_fee(Decimal(1), book.best_ask, schedule) + fee_buffer)
+    min_cost = (
+        min_notional_usd
+        if min_notional_usd is not None
+        else min_order_size * (book.best_ask + taker_fee(Decimal(1), book.best_ask, schedule) + fee_buffer)
+    )
     return SizingResult(
         False,
         ReasonCode.BELOW_MIN_ORDER,

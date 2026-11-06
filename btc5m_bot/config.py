@@ -97,6 +97,18 @@ class RuntimeConfig(BaseModel):
     taker_delay_ms: int = 250
     fee_buffer: Decimal = Decimal("0.002")
 
+    # Entry minimum expressed in dollars instead of shares. Polymarket marketable (FOK/FAK) BUY
+    # orders are denominated in collateral and have a $1 minimum; the 5-share minimum applies to
+    # resting limit orders. None restores the legacy share-count minimum from market metadata.
+    min_order_notional_usd: Decimal | None = Decimal("1.00")
+
+    @field_validator("min_order_notional_usd")
+    @classmethod
+    def _min_notional(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v <= 0:
+            raise ValueError("min_order_notional_usd must be positive (or null for share minimums)")
+        return v
+
     @field_validator("capital_usd")
     @classmethod
     def _capital_positive(cls, v: Decimal | None) -> Decimal | None:

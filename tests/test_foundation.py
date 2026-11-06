@@ -173,3 +173,14 @@ def test_env_example_is_consistent_with_settings(tmp_path, monkeypatch):
     s = Settings(_env_file=example, project_root=tmp_path)
     for name in ("dashboard_password_hash", "session_secret", "private_key", "clob_api_key", "clob_api_secret", "clob_api_passphrase", "funder_address"):
         assert getattr(s, name) is None, name
+
+
+def test_min_order_notional_default_and_validation():
+    from decimal import Decimal as _D
+    from btc5m_bot.config import RuntimeConfig
+
+    assert RuntimeConfig().min_order_notional_usd == _D("1.00")
+    assert RuntimeConfig(min_order_notional_usd=None).min_order_notional_usd is None
+    import pytest as _pytest
+    with _pytest.raises(Exception):
+        RuntimeConfig(min_order_notional_usd=_D("0"))

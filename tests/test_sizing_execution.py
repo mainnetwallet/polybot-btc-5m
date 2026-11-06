@@ -232,3 +232,36 @@ def test_cancel_is_never_assumed(clock, repo, adapter):
     asyncio.run(engine.execute_entry(intent, market, book))
     assert asyncio.run(engine.cancel_verified(intent.client_order_id, None)) is False
     assert repo.get_order(intent.client_order_id).status == OrderStatus.UNKNOWN.value
+
+
+def test_dollar_minimum_allows_sub_five_share_entry_within_risk():
+    # Capital 100 -> risk budget $2.00. At $0.50 that is ~3.9 shares: below the 5-share limit-order
+    # minimum but well above the $1 marketable-BUY minimum.
+    book = make_book("up", bid="0.49", ask="0.50", ask_size="10000")
+    legacy = size_position(
+        capital=Decimal("100"), risk_pct=Decimal("0.02"), balance=Decimal("100"),
+        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
+    )
+    assert not legacy.allowed and legacy.reason is ReasonCode.BELOW_MIN_ORDER
+    dollars = size_position(
+        capital=Decimal("100"), risk_pct=Decimal("0.02"), balance=Decimal("100"),
+        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
+        min_notional_usd=Decimal("1.00"),
+    )
+    assert dollars.allowed
+    assert dollars.shares < Decimal("5")
+    assert dollars.notional >= Decimal("1.00")
+    assert dollars.worst_case_loss <= Decimal("2.00")  # risk is never exceeded
+
+
+def test_dollar_minimum_never_raises_risk_to_reach_one_dollar():
+    # Capital 20 -> risk budget $0.40, below the $1 minimum: must refuse, never size up.
+    book = make_book("up", bid="0.49", ask="0.50", ask_size="10000")
+    result = size_position(
+        capital=Decimal("20"), risk_pct=Decimal("0.02"), balance=Decimal("20"),
+        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
+        min_notional_usd=Decimal("1.00"),
+    )
+    assert not result.allowed
+    assert result.reason is ReasonCode.BELOW_MIN_ORDER
+    assert result.shares == Decimal(0)
