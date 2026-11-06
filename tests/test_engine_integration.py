@@ -396,3 +396,40 @@ def test_repeated_no_trade_reason_is_logged_once_per_minute(settings, repo, adap
     clock.advance(2)  # a different reason is logged right away
     engine._note(clock.now(), "NO_TRADE", ReasonCode.TRADING_OFF, "trading switch is OFF")
     assert len(repo.recent_decisions(500)) - before == 3
+
+
+def test_paper_settles_from_oracle_simulation_when_onchain_resolution_lags(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())
+    machine = engine._machines[market.market_id]
+    repo.create_position(
+        market_id=market.market_id,
+        condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP),
+        outcome="UP",
+        shares=Decimal("5"),
+        avg_price=Decimal("0.5"),
+        entry_fee=Decimal(0),
+        mode="PAPER",
+    )
+    # Oracle simulation says UP; the exchange has not published a resolution yet.
+    engine._simulations[market.market_id] = (
+        None,
+        SimpleNamespace(valid=True, outcome=Outcome.UP, opening_reference=None, closing_reference=None,
+                        confidence=1.0, notional_methodology="test", observations_used=[], coverage_pct=100),
+    )
+    adapter.resolutions.pop(market.condition_id, None)
+
+    # Inside the grace period: still open.
+    clock.advance(310)
+    asyncio.run(engine._settle_windows(clock.now()))
+    assert repo.get_position(market.market_id, "PAPER").status == "OPEN"
+
+    # After the grace period: settled and counted as a closing trade.
+    clock.advance(30)
+    asyncio.run(engine._settle_windows(clock.now()))
+    position = repo.get_position(market.market_id, "PAPER")
+    assert position.status == "SETTLED"
+    assert machine.state is MarketState.SETTLED
+    assert any(t.kind == "SETTLEMENT" for t in repo.list_trades(limit=10))

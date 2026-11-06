@@ -59,6 +59,7 @@ btc5m_bot/oracle/__init__.py
 btc5m_bot/oracle/simulator.py
 btc5m_bot/oracle/twap.py
 btc5m_bot/risk/__init__.py
+btc5m_bot/risk/capital.py
 btc5m_bot/risk/exposure.py
 btc5m_bot/risk/manager.py
 btc5m_bot/web/app.js
@@ -72,6 +73,8 @@ polybot.egg-info/entry_points.txt
 polybot.egg-info/requires.txt
 polybot.egg-info/top_level.txt
 tests/test_analytics_api.py
+tests/test_backfill.py
+tests/test_clear_activity.py
 tests/test_data_package.py
 tests/test_engine_integration.py
 tests/test_entrypoints.py

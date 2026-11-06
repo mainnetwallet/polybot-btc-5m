@@ -76,6 +76,8 @@ DISCOVERY_SECONDS = 15.0
 GATE_REFRESH_SECONDS = 60.0
 BOOK_RECORD_SECONDS = 2.0
 DECISION_LOG_SECONDS = 2.0
+HOLD_LOG_SECONDS = 10.0
+PAPER_SETTLE_GRACE_SECONDS = 15.0
 # A NO_TRADE that repeats the previous reason for the same market is a heartbeat, not news:
 # it is logged at most this often. A different reason is still logged right away (see above).
 DECISION_REPEAT_LOG_SECONDS = 60.0
@@ -176,6 +178,7 @@ class BotEngine:
         self._last_resolution_try: dict[str, float] = {}
         self._simulations: dict[str, Any] = {}
         self._settlement_deferred: set[str] = set()
+        self._last_hold_log: dict[str, float] = {}
         self._tick_cursor: dict[str, datetime] = {}
         self._twap_cursor: datetime | None = None
         self._feature_record_at = 0.0
@@ -960,6 +963,36 @@ class BotEngine:
         self._publish(now)
 
     # ------------------------------------------------------------------- exits
+    def _log_hold(self, now: datetime, position, decision) -> None:
+        """Record why an open position was NOT sold (rate limited) so the Activity log explains it."""
+        mono = self.clock.monotonic()
+        if mono - self._last_hold_log.get(position.market_id, -1e9) < HOLD_LOG_SECONDS:
+            return
+        self._last_hold_log[position.market_id] = mono
+
+        def _plain(value):
+            if isinstance(value, Decimal):
+                return str(value)
+            if isinstance(value, (int, float, bool, str)) or value is None:
+                return value
+            return str(value)
+
+        meta = {k: _plain(v) for k, v in (decision.metadata or {}).items()}
+        meta["exit_rule"] = decision.reason
+        if decision.shadow_reason:
+            meta["would_have_sold_for"] = decision.shadow_reason
+        roi = f"{decision.roi:+.2%}" if decision.roi is not None else "n/a"
+        target = meta.get("take_profit_target")
+        target_txt = f"{Decimal(target):.2%}" if target not in (None, "") else "n/a"
+        self._note(
+            now,
+            "HOLD",
+            ReasonCode.OK,
+            f"{decision.reason}: {decision.detail} | ROI {roi} vs take-profit target {target_txt}",
+            price=decision.mark_price,
+            extra=meta,
+        )
+
     async def _manage_position(self, now: datetime) -> None:
         position = self.ledger.active_position(self._effective_mode.value)
         if position is None:
@@ -992,6 +1025,7 @@ class BotEngine:
             book_max_age_ms=cfg.max_book_age_ms,
         )
         if decision.action is not ExitAction.SELL:
+            self._log_hold(now, position, decision)
             return
         if self._unresolved_orders(market.market_id):
             # Never re-submit a SELL while a previous exit order's fate is unknown;
@@ -1069,9 +1103,23 @@ class BotEngine:
                     log.debug("resolution fetch failed: %s", exc)
                 if actual:
                     self._record_actual(market.market_id, actual)
+            provisional = False
+            if actual is None and self._effective_mode is Mode.PAPER:
+                # On-chain payouts can lag by minutes. PAPER has no funds to redeem, so settle from
+                # the oracle simulation after a short grace period instead of leaving the position
+                # open (it blocks new entries and keeps win/loss out of Analytics). LIVE never guesses.
+                sim = self._simulations.get(market.market_id)
+                if (
+                    sim is not None
+                    and sim[1].valid
+                    and sim[1].outcome is not None
+                    and (now - machine.end).total_seconds() >= PAPER_SETTLE_GRACE_SECONDS
+                ):
+                    actual = sim[1].outcome.value
+                    provisional = True
             if actual is None:
                 continue
-            await self._finalize_window(machine, actual, now)
+            await self._finalize_window(machine, actual, now, provisional=provisional)
 
     def _attempt_simulation(self, machine: MarketStateMachine, now: datetime) -> None:
         market = machine.market
@@ -1137,10 +1185,12 @@ class BotEngine:
                 actual=actual,
             )
 
-    async def _finalize_window(self, machine: MarketStateMachine, actual: str, now: datetime) -> None:
+    async def _finalize_window(
+        self, machine: MarketStateMachine, actual: str, now: datetime, *, provisional: bool = False
+    ) -> None:
         market = machine.market
         sim = self._simulations.get(market.market_id)
-        if sim is not None:
+        if sim is not None and not provisional:
             _, result = sim
             match, _ = compare_to_actual(result, actual)
             self.repo.save_resolution(
@@ -1181,7 +1231,8 @@ class BotEngine:
                 now,
                 "SETTLE",
                 ReasonCode.OK,
-                f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized}",
+                f"settled {position.outcome} shares={position.shares} outcome={actual} pnl={realized}"
+                + (" (PAPER, oracle-simulated outcome; on-chain resolution pending)" if provisional else ""),
                 price=Decimal(1) if position.outcome.upper() == actual.upper() else Decimal(0),
             )
             self.exits.forget(position.id)
@@ -1190,7 +1241,7 @@ class BotEngine:
             market.market_id,
             MarketState.SETTLED.value,
             resolution_outcome=actual.upper(),
-            resolution_confirmed=True,
+            resolution_confirmed=not provisional,
             settlement_ts=now,
         )
 
