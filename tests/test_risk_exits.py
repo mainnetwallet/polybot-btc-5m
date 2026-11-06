@@ -575,3 +575,46 @@ def test_reset_day_lock_after_profit_lock_does_not_relock(clock, repo):
     assert repo.get_risk_day(START.date()).profit_lock_triggered is True
     out = risk.reset_day_lock(actor="tester", reason="review")
     assert out["will_relock"] is False
+
+
+def test_exit_limit_covers_every_bid_level_needed_for_a_full_exit():
+    # 10 shares, but the top bid only holds 4: feasibility walks three levels, so the SELL limit
+    # must reach the worst level it needs (0.33), not just the best bid (0.35).
+    exits = HybridExitManager()
+    market = make_market()
+    book = make_book(
+        market.asset_id(Outcome.UP),
+        bids=[("0.35", "4"), ("0.34", "4"), ("0.33", "4")],
+    )
+    decision = exits.evaluate(
+        position=position(), market=market, up_book=book, down_book=None,
+        probability=None, config=config(), now=START,
+    )
+    assert decision.action is ExitAction.SELL and decision.reason == "STOP_LOSS"
+    assert decision.limit_price == Decimal("0.33")
+    assert decision.feasibility.worst_price == Decimal("0.33")
+
+
+def test_exit_limit_is_best_bid_when_top_level_is_deep_enough():
+    exits = HybridExitManager()
+    market = make_market()
+    book = make_book(market.asset_id(Outcome.UP), bids=[("0.35", "100"), ("0.30", "100")])
+    decision = exits.evaluate(
+        position=position(), market=market, up_book=book, down_book=None,
+        probability=None, config=config(), now=START,
+    )
+    assert decision.action is ExitAction.SELL
+    assert decision.limit_price == Decimal("0.35")
+
+
+def test_exit_limit_is_floored_to_the_market_tick():
+    exits = HybridExitManager()
+    market = make_market()
+    book = make_book(market.asset_id(Outcome.UP), bids=[("0.35", "5"), ("0.3349", "5")])
+    decision = exits.evaluate(
+        position=position(), market=market, up_book=book, down_book=None,
+        probability=None, config=config(), now=START,
+    )
+    assert decision.action is ExitAction.SELL
+    assert decision.limit_price == Decimal("0.33")
+    assert decision.limit_price % market.tick_size == 0

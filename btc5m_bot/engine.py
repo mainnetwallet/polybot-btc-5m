@@ -1071,7 +1071,19 @@ class BotEngine:
         )
         try:
             outcome_result = await self.execution.execute_exit(intent, market, up_book if position.outcome.upper() == "UP" else down_book, position)
-        except DuplicateOrderError:
+        except DuplicateOrderError as exc:
+            # An exit that is silently dropped can leave a losing position open. Make it visible.
+            log.error("exit order rejected as duplicate (%s): market=%s reason=%s", exc, position.market_id, decision.reason)
+            self.repo.add_protection_event(
+                "EXIT_DUPLICATE_ORDER",
+                "ERROR",
+                market_id=position.market_id,
+                reason=decision.reason,
+                shares=str(decision.shares),
+                limit_price=str(decision.limit_price),
+                idempotency_key=str(exc)[:80],
+            )
+            self._note(now, "EXIT", ReasonCode.OK, f"exit {decision.reason} dropped as duplicate order; will retry")
             return
         if outcome_result.result.filled_shares > 0:
             self.state.increment("exits")

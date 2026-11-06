@@ -187,3 +187,79 @@ def _no_book_edge():
         probability=0.9, book=None, outcome="UP", shares=Decimal("10"),
         schedule=FeeSchedule(rate=Decimal("0.07"), exponent=1, enabled=True),
     )
+
+
+def _live_exit_setup(clock, repo, adapter):
+    journal = OrderJournal(repo)
+    execution = ExecutionEngine(
+        repo=repo, journal=journal, adapter=adapter, paper=None, clock=clock,
+        mode_provider=lambda: Mode.LIVE,
+    )
+    market = make_market()
+    asset = market.asset_id(Outcome.UP)
+    position = repo.create_position(
+        market_id=market.market_id, condition_id=market.condition_id, asset_id=asset,
+        outcome=Outcome.UP.value, shares=Decimal("10"), avg_price=Decimal("0.50"),
+        entry_fee=Decimal(0), mode="LIVE",
+    )
+    return journal, execution, market, asset, position
+
+
+def test_multi_level_exit_fills_through_the_exit_manager_limit(clock, repo, adapter):
+    """The exit manager's limit must let a FOK SELL walk every bid level it counted as feasible."""
+    from btc5m_bot.config import RuntimeConfig
+    from btc5m_bot.exits import ExitAction, HybridExitManager
+    from conftest import START
+
+    journal, execution, market, asset, position = _live_exit_setup(clock, repo, adapter)
+    levels = [("0.35", "4"), ("0.34", "4"), ("0.33", "4")]
+    adapter.set_book(asset, bids=levels, asks=[("0.40", "100")])
+    book = make_book(asset, bids=levels)
+    decision = HybridExitManager().evaluate(
+        position=position, market=market, up_book=book, down_book=None, probability=None,
+        config=RuntimeConfig(capital_usd=Decimal("1000"), daily_loss_limit_usd=Decimal("40")),
+        now=START,
+    )
+    assert decision.action is ExitAction.SELL
+    intent = journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.SELL, shares=decision.shares,
+        limit_price=decision.limit_price, order_type="FOK", mode="LIVE", reason=decision.reason,
+    )
+    outcome = asyncio.run(execution.execute_exit(intent, market, book, position))
+    assert outcome.result.status is OrderStatus.FILLED
+    assert outcome.result.filled_shares == Decimal("10")
+
+
+def test_fake_adapter_sell_limit_is_a_per_level_floor(clock, repo, adapter):
+    """Like the real CLOB, a SELL limit stops matching below the limit price (not an average)."""
+    journal, execution, market, asset, position = _live_exit_setup(clock, repo, adapter)
+    adapter.set_book(asset, bids=[("0.35", "4"), ("0.34", "4"), ("0.33", "4")], asks=[("0.40", "100")])
+    book = make_book(asset)
+    too_high = _sell(journal, market, shares="10", price="0.35")
+    res = asyncio.run(execution.execute_exit(too_high, market, book, position))
+    assert res.result.filled_shares == 0
+
+
+def test_sdk_sell_sends_the_intent_limit_as_min_price(clock, repo):
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from btc5m_bot.exchange.sdk_adapter import PolymarketAdapter
+
+    seen = {}
+
+    class Client:
+        async def place_market_order(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(ok=False, code="X", message="x")
+
+    settings = SimpleNamespace(
+        private_key=SecretStr("0x" + "1" * 64), gamma_url="http://localhost",
+    )
+    adapter = PolymarketAdapter(settings, secure_factory=lambda s: Client())
+    market = make_market()
+    intent = _sell(OrderJournal(repo), market, shares="10", price="0.33")
+    asyncio.run(adapter.place_order(intent, market))
+    assert seen["min_price"] == Decimal("0.33")
+    assert seen["shares"] == Decimal("10")

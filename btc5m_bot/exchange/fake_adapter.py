@@ -118,13 +118,16 @@ class FakeExchangeAdapter(ExchangeAdapter):
                 exchange_order_id="fake-" + intent.client_order_id[:8],
                 raw_status="limit_not_met",
             )
-        if intent.side is Side.SELL and avg < intent.limit_price:
-            return OrderResult(
-                client_order_id=intent.client_order_id,
-                status=OrderStatus.CANCELLED,
-                exchange_order_id="fake-" + intent.client_order_id[:8],
-                raw_status="limit_not_met",
-            )
+        if intent.side is Side.SELL and wanted > 0:
+            # Real CLOB semantics: min_price is a per-level floor, so only bids at or above it match.
+            matchable = sum((l.size for l in book.bids if l.price >= intent.limit_price), Decimal(0))
+            if matchable < wanted:
+                return OrderResult(
+                    client_order_id=intent.client_order_id,
+                    status=OrderStatus.CANCELLED,
+                    exchange_order_id="fake-" + intent.client_order_id[:8],
+                    raw_status="limit_not_met",
+                )
         fee = taker_fee(filled, avg, FeeSchedule.from_market(market))
         order_id = "fake-" + intent.client_order_id[:12]
         self.open_orders.pop(order_id, None)

@@ -478,3 +478,35 @@ def test_dashboard_edits_of_taker_delay_and_oracle_coverage_apply_without_restar
     assert engine.paper.taker_delay_ms == 7
     assert engine.execution.taker_delay_ms == 7
     assert engine.probability_engine.min_coverage_seconds == 33.0
+
+
+def test_duplicate_exit_order_is_recorded_not_swallowed(settings, repo, adapter, config_store):
+    from btc5m_bot.db.repo import DuplicateOrderError
+    from btc5m_bot.exits import ExitAction, ExitDecision
+
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())
+    repo.create_position(
+        market_id=market.market_id,
+        condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP),
+        outcome="UP",
+        shares=Decimal("5"),
+        avg_price=Decimal("0.5"),
+        entry_fee=Decimal(0),
+        mode="PAPER",
+    )
+    engine.exits.evaluate = lambda **kwargs: ExitDecision(
+        ExitAction.SELL, "STOP_LOSS", "test", 2, shares=Decimal("5"), limit_price=Decimal("0.48")
+    )
+
+    async def duplicate(*args, **kwargs):
+        raise DuplicateOrderError("dup-key")
+
+    engine.execution.execute_exit = duplicate
+    clock.advance(5)
+    asyncio.run(engine._manage_position(clock.now()))
+
+    events = {e.event_type for e in repo.recent_protection_events(limit=25)}
+    assert "EXIT_DUPLICATE_ORDER" in events
