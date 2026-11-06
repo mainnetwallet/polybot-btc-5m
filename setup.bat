@@ -78,8 +78,8 @@ echo   2. Review config\runtime.json. Mode stays PAPER until LIVE is explicitly
 echo      activated through the 23-condition gate.
 echo   3. Start the bot with:  start.bat
 echo      Dashboard:           http://127.0.0.1:8765
-echo   4. Review resolution rules and approve the intended fingerprint:
-echo        .venv\Scripts\python.exe -m btc5m_bot status
+echo   4. Review resolution rules on the dashboard Rules page, then approve the
+echo      intended fingerprint there or with:
 echo        .venv\Scripts\python.exe -m btc5m_bot approve-rule ^<fingerprint^>
 echo.
 echo LIVE trading is NOT enabled by this script. Keep it PAPER while validating.

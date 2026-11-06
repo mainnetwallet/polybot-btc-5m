@@ -200,7 +200,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
     path = settings.data_path / "STOP"
     path.write_text("stop requested at operator CLI\n", encoding="utf-8")
     print(f"STOP file written: {path}")
-    print("a supervised run will shut down within a few seconds; run.bat will exit")
+    print("a supervised run will shut down within a few seconds; start.bat will exit")
     return 0
 
 

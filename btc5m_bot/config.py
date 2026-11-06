@@ -220,8 +220,9 @@ class RuntimeConfig(BaseModel):
     @field_validator("stop_loss_roi")
     @classmethod
     def _stop(cls, v: Decimal) -> Decimal:
-        if v >= 0 or v < Decimal("-1"):
-            raise ValueError("stop_loss_roi must be in [-1, 0)")
+        # -1 (a 100% loss) can never trigger for a binary share, so it would silently mean "no stop".
+        if v >= 0 or v <= Decimal("-1"):
+            raise ValueError("stop_loss_roi must be in (-1, 0)")
         return v
 
     @field_validator("momentum_reversal_z")
@@ -248,8 +249,8 @@ class RuntimeConfig(BaseModel):
     @field_validator("take_profit_roi")
     @classmethod
     def _tp(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ValueError("take_profit_roi must be positive")
+        if v <= 0 or v > 10:
+            raise ValueError("take_profit_roi must be in (0, 10]")
         return v
 
     @field_validator("dynamic_tp_min_multiple")
@@ -262,8 +263,8 @@ class RuntimeConfig(BaseModel):
     @field_validator("dynamic_tp_max_multiple")
     @classmethod
     def _tp_max(cls, v: Decimal) -> Decimal:
-        if v < 1:
-            raise ValueError("dynamic_tp_max_multiple must be >= 1")
+        if v < 1 or v > 10:
+            raise ValueError("dynamic_tp_max_multiple must be between 1 and 10")
         return v
 
     # ---- range checks for the remaining numeric tunables (every one is dashboard-writable) ----
