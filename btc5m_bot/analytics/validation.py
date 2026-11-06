@@ -115,8 +115,30 @@ def build_validation_report(repo: Repository, config: RuntimeConfig) -> Validati
         failures.append(f"Brier score {calib.brier} > 0.22")
 
     pnls = [float(t.realized_pnl) for t in paper_closes]
-    alpha_adj = ALPHA / N_VARIANTS
+    ablation = _ablation(repo)
+    variant_count = max(N_VARIANTS, len([v for v in ablation if v != "UNKNOWN"]))
+    alpha_adj = ALPHA / variant_count
     low, high = _bootstrap_mean_ci(pnls, confidence=1 - alpha_adj)
+
+    # A chronological holdout is kept separate from the aggregate bootstrap diagnostic.
+    # This is an out-of-sample check on recorded PAPER closes, not a historical tick replay.
+    ordered_closes = sorted(paper_closes, key=lambda t: t.ts)
+    split_index = int(len(ordered_closes) * 0.70)
+    train_closes = ordered_closes[:split_index]
+    holdout_closes = ordered_closes[split_index:]
+    min_holdout_trades = max(20, int(required_trades * 0.30 + 0.999))
+    holdout_perf = compute_performance(holdout_closes)
+    holdout_pnls = [float(t.realized_pnl) for t in holdout_closes]
+    holdout_low, holdout_high = _bootstrap_mean_ci(holdout_pnls, confidence=1 - alpha_adj)
+    if len(holdout_closes) < min_holdout_trades:
+        failures.append(
+            f"chronological holdout trades {len(holdout_closes)} < required {min_holdout_trades}"
+        )
+    else:
+        if holdout_perf.net_pnl <= 0:
+            failures.append(f"chronological holdout net PnL {holdout_perf.net_pnl} is not positive")
+        if holdout_low is None or holdout_low <= 0:
+            failures.append(f"chronological holdout expectancy lower bound {holdout_low} is not above zero")
     if perf.trades >= required_trades:
         if perf.net_pnl <= 0:
             failures.append(f"paper net PnL {perf.net_pnl} is not positive")
@@ -134,8 +156,9 @@ def build_validation_report(repo: Repository, config: RuntimeConfig) -> Validati
         if biggest > perf.gross_profit * Decimal("0.25"):
             failures.append("profit concentration: a single trade exceeds 25% of gross profit")
 
-    notes.append(f"binomial-adjusted alpha {alpha_adj:.4f} across {N_VARIANTS} strategy variants")
+    notes.append(f"binomial-adjusted alpha {alpha_adj:.4f} across at least {N_VARIANTS} strategy variants")
     notes.append("validation uses PAPER trades only; LIVE trades must not be used to qualify LIVE")
+    notes.append("chronological 70/30 holdout uses recorded PAPER closes; it is not a historical market replay or proof of an untouched research dataset")
     if total == 0:
         notes.append("no resolution simulations have been validated yet")
 
@@ -147,9 +170,18 @@ def build_validation_report(repo: Repository, config: RuntimeConfig) -> Validati
             "resolution_validation": {"total": total, "matched": matched, "match_rate": match_rate},
             "calibration": calib.as_dict(),
             "bootstrap_expectancy": {"low": low, "high": high, "confidence": 1 - alpha_adj},
+            "chronological_holdout": {
+                "train_trades": len(train_closes),
+                "trades": holdout_perf.trades,
+                "net_pnl": str(holdout_perf.net_pnl),
+                "expectancy_ci_low": holdout_low,
+                "expectancy_ci_high": holdout_high,
+                "minimum_trades": min_holdout_trades,
+                "split": "70/30 chronological",
+            },
             "stressed_net_pnl": str(stressed),
             "daily": daily_performance(paper_closes),
-            "ablation": _ablation(repo),
+            "ablation": ablation,
         },
         notes=notes,
     )

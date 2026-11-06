@@ -242,6 +242,8 @@ heartbeat for testing outside an authorized LIVE activation.
 
 After a LIVE position settles, the engine scans for the matching venue position marked `redeemable`, submits one redemption, waits for the SDK transaction confirmation, and records the transaction hash. An ambiguous submission is quarantined as `UNKNOWN` and is not retried automatically; reconcile it on-chain before changing that state.
 
+The validation report now separates the last 30% of recorded PAPER close trades as a chronological holdout (minimum 20 observations) and requires positive holdout PnL plus a positive moving-block-bootstrap lower bound. This is not a historical tick replay and does not prove the data was untouched by prior strategy tuning.
+
 The engine synchronizes its market clock against the CLOB `/time` endpoint every 15 seconds while LIVE. A slow response or local clock drift beyond five seconds blocks LIVE entry and fails the activation gate. The engine also reads market `trading.secondsDelay` and requires enough entry-window time for that delay plus acknowledgement latency; malformed delay metadata blocks entry.
 
 The worker re-checks the whole heartbeat safety configuration (enabled flag, credentials,

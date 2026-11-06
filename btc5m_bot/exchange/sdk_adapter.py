@@ -32,6 +32,7 @@ from .base import (
     ExchangeError,
     ExchangeOpenOrder,
     ExchangePosition,
+    ExchangeTradeFill,
     GeoResult,
     HeartbeatResult,
     NotConfiguredError,
@@ -403,6 +404,58 @@ class PolymarketAdapter(ExchangeAdapter):
             status=str(item.status),
             created_at=as_utc(item.created_at) if item.created_at else None,
         )
+
+    async def get_order_fills(
+        self, *, order_id: str, asset_id: str, start: datetime, end: datetime
+    ) -> list[ExchangeTradeFill]:
+        """Fetch authenticated, order-id-attributed fills and preserve venue confirmation state."""
+        client = await self._secure_client()
+        try:
+            paginator = client.list_account_trades(
+                asset_id=asset_id,
+                after=str(int(start.timestamp())),
+                before=str(int(end.timestamp())),
+                page_size=500,
+            )
+            fills: list[ExchangeTradeFill] = []
+            seen: set[str] = set()
+            async for trade in paginator.iter_items():
+                if str(trade.asset_id) != asset_id:
+                    continue
+                trade_id = str(trade.id)
+                if trade_id in seen:
+                    continue
+                if str(trade.taker_order_id) == order_id:
+                    fills.append(ExchangeTradeFill(
+                        trade_id=trade_id, order_id=order_id, asset_id=asset_id,
+                        condition_id=str(trade.condition_id), side=str(trade.side),
+                        trader_side=str(trade.trader_side), shares=Decimal(trade.size),
+                        price=Decimal(trade.price), fee_rate_bps=Decimal(trade.fee_rate_bps),
+                        status=str(trade.status), matched_at=as_utc(trade.matched_at),
+                        transaction_hash=trade.transaction_hash,
+                    ))
+                    seen.add(trade_id)
+                    continue
+                for maker in trade.maker_orders:
+                    if str(maker.order_id) != order_id:
+                        continue
+                    fills.append(ExchangeTradeFill(
+                        trade_id=trade_id, order_id=order_id, asset_id=asset_id,
+                        condition_id=str(trade.condition_id), side=str(maker.side),
+                        trader_side="MAKER", shares=Decimal(maker.matched_amount),
+                        price=Decimal(maker.price),
+                        fee_rate_bps=Decimal(maker.fee_rate_bps or 0),
+                        status=str(trade.status), matched_at=as_utc(trade.matched_at),
+                        transaction_hash=trade.transaction_hash,
+                    ))
+                    seen.add(trade_id)
+            if len(fills) > 1000:
+                raise ExchangeError("order fill history exceeds safe reconciliation bound")
+            return fills
+        except Exception as exc:
+            if isinstance(exc, ExchangeError):
+                raise
+            raise ExchangeError(f"order-level trade lookup failed: {exc}") from exc
 
     async def get_resolution(self, condition_id: str, outcomes: tuple[str, ...] | None = None) -> str | None:
         client = await self._secure_client() if self.configured else await self._public_client()

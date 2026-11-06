@@ -40,6 +40,22 @@ class ExchangePosition:
 
 
 @dataclass
+class ExchangeTradeFill:
+    trade_id: str
+    order_id: str
+    asset_id: str
+    condition_id: str
+    side: str
+    trader_side: str
+    shares: Decimal
+    price: Decimal
+    fee_rate_bps: Decimal
+    status: str
+    matched_at: datetime
+    transaction_hash: str | None = None
+
+
+@dataclass
 class ExchangeOpenOrder:
     order_id: str
     asset_id: str
@@ -104,6 +120,11 @@ class ExchangeAdapter(ABC):
 
     @abstractmethod
     async def get_order(self, order_id: str) -> ExchangeOpenOrder | None: ...
+
+    async def get_order_fills(
+        self, *, order_id: str, asset_id: str, start: datetime, end: datetime
+    ) -> list[ExchangeTradeFill]:
+        raise ExchangeError("exchange adapter does not support order-level trade reconciliation")
 
     @abstractmethod
     async def get_resolution(self, condition_id: str, outcomes: tuple[str, ...] | None = None) -> str | None: ...
