@@ -210,7 +210,11 @@ class RecoveryManager:
                 if not cancelled:
                     blocks.append(f"could not cancel orphan order {row.exchange_order_id}")
                     return False
-                check = await self.adapter.get_order(row.exchange_order_id)
+                try:
+                    check = await self.adapter.get_order(row.exchange_order_id)
+                except Exception as exc:  # noqa: BLE001
+                    blocks.append(f"cancellation of {row.exchange_order_id} could not be verified: {exc}")
+                    return False
                 if check is not None and str(check.status).lower() not in {"cancelled", "canceled", "expired"}:
                     blocks.append(f"cancellation unverified for {row.exchange_order_id}")
                     return False
