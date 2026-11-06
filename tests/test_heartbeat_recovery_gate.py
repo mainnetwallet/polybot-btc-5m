@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from btc5m_bot.exchange.base import Balance, ExchangeOpenOrder, ExchangePosition, GeoResult
+from btc5m_bot.exchange.base import Balance, ExchangeOpenOrder, ExchangePosition, ExchangeTradeFill, GeoResult
 from btc5m_bot.execution.journal import OrderJournal
 from btc5m_bot.gate import LIVE_CONFIRMATION_PHRASE, GateContext, LiveGate
 from btc5m_bot.heartbeat.worker import (
@@ -431,3 +431,92 @@ def test_heartbeat_does_not_send_when_credentials_disappear(clock, repo, setting
     asyncio.run(worker._send_once())
     assert adapter.heartbeat_ids == []
     assert "credentials_present" in repo.get_state("heartbeat_skipped")["reason"]
+
+
+
+def test_recovery_reconciles_sell_fill_from_confirmed_order_trades(clock, repo, adapter):
+    market = make_market()
+    repo.upsert_market(market)
+    position = repo.create_position(
+        market_id=market.market_id, condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP), outcome="UP",
+        shares=Decimal("10"), avg_price=Decimal("0.50"),
+        entry_fee=Decimal("0.175"), mode="LIVE",
+    )
+    journal = OrderJournal(repo)
+    intent = journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.SELL,
+        shares=Decimal("10"), limit_price=Decimal("0.45"),
+        order_type="FAK", mode="LIVE",
+    )
+    journal.persist_intent(intent, reserve_amount=Decimal("1"))
+    journal.mark_submitting(intent)
+    repo.update_order(
+        intent.client_order_id, exchange_order_id="ex-sell-1",
+        status=OrderStatus.PARTIAL.value,
+    )
+    adapter.positions = [ExchangePosition(
+        asset_id=position.asset_id, condition_id=position.condition_id,
+        size=Decimal("5"), avg_price=Decimal("0.50"),
+    )]
+    adapter.order_fills["ex-sell-1"] = [ExchangeTradeFill(
+        trade_id="trade-1", order_id="ex-sell-1", asset_id=position.asset_id,
+        condition_id=position.condition_id, side="SELL", trader_side="TAKER",
+        shares=Decimal("5"), price=Decimal("0.45"), fee_rate_bps=Decimal("700"),
+        status="CONFIRMED", matched_at=START, transaction_hash="0xconfirmed",
+    )]
+
+    result = asyncio.run(RecoveryManager(
+        repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE,
+    ).run())
+
+    assert result.ready is True, result.blocks
+    recovered = repo.get_position(market.market_id, "LIVE")
+    assert recovered.shares == Decimal("5")
+    assert recovered.status == "OPEN"
+    order = repo.get_order(intent.client_order_id)
+    assert order.filled_shares == Decimal("5")
+    assert order.status == OrderStatus.PARTIAL.value
+    trades = [t for t in repo.list_trades(mode="LIVE") if t.client_order_id == intent.client_order_id]
+    assert len(trades) == 1
+    assert trades[0].kind == "EXIT_RECOVERY"
+    # A second recovery pass must be idempotent.
+    asyncio.run(RecoveryManager(repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE).run())
+    trades_again = [t for t in repo.list_trades(mode="LIVE") if t.client_order_id == intent.client_order_id]
+    assert len(trades_again) == 1
+
+
+def test_recovery_blocks_sell_fill_when_fee_rate_does_not_match_market(clock, repo, adapter):
+    market = make_market()
+    repo.upsert_market(market)
+    position = repo.create_position(
+        market_id=market.market_id, condition_id=market.condition_id,
+        asset_id=market.asset_id(Outcome.UP), outcome="UP",
+        shares=Decimal("10"), avg_price=Decimal("0.50"),
+        entry_fee=Decimal("0.175"), mode="LIVE",
+    )
+    journal = OrderJournal(repo)
+    intent = journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.SELL,
+        shares=Decimal("10"), limit_price=Decimal("0.45"),
+        order_type="FAK", mode="LIVE",
+    )
+    journal.persist_intent(intent, reserve_amount=Decimal("1"))
+    journal.mark_submitting(intent)
+    repo.update_order(intent.client_order_id, exchange_order_id="ex-sell-2", status=OrderStatus.PARTIAL.value)
+    adapter.positions = [ExchangePosition(
+        asset_id=position.asset_id, condition_id=position.condition_id,
+        size=Decimal("5"), avg_price=Decimal("0.50"),
+    )]
+    adapter.order_fills["ex-sell-2"] = [ExchangeTradeFill(
+        trade_id="trade-2", order_id="ex-sell-2", asset_id=position.asset_id,
+        condition_id=position.condition_id, side="SELL", trader_side="TAKER",
+        shares=Decimal("5"), price=Decimal("0.45"), fee_rate_bps=Decimal("900"),
+        status="CONFIRMED", matched_at=START, transaction_hash="0xconfirmed",
+    )]
+    result = asyncio.run(RecoveryManager(
+        repo=repo, adapter=adapter, clock=clock, mode=Mode.LIVE,
+    ).run())
+    assert result.ready is False
+    assert any("fee rate differs" in block for block in result.blocks)
+    assert repo.get_position(market.market_id, "LIVE").shares == Decimal("10")
