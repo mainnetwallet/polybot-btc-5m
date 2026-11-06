@@ -9,13 +9,13 @@ passes a strict 23-condition gate and types an explicit confirmation phrase.
 
 ---
 
-## Safety invariants (not configurable)
+## Safety limits
 
 | Limit | Value |
 |---|---|
-| Planned loss per trade | max **2%** of allocated capital, assuming a full loss even with a stop |
-| Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1) |
-| Consecutive losses before cooldown | max **2**, then a 15-minute cooldown |
+| Planned loss per trade | max **2%** of allocated capital (hard cap on `risk_per_trade_pct`), assuming a full loss even with a stop. **Applies only when sizing by risk %** (`trade_size_usd` = null). In the default fixed-dollar mode (`trade_size_usd` set, default $1) this cap is **not applied**: a full loss of a $1 trade on $5 capital is about 20%. Fixed-dollar trades are still bounded by the available balance, the daily loss limit and the loss-streak guard |
+| Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1, must be > 0). Configurable in the dashboard Settings; a lock it triggers cannot be bypassed |
+| Consecutive losses before cooldown | max **2** (hard cap), then a cooldown of `cooldown_minutes` (default 15, allowed 1 to 1440) |
 | Concurrent positions | **1** |
 | Entries per market | **1** |
 | Entry window | **120 seconds** from market start |
@@ -25,8 +25,11 @@ passes a strict 23-condition gate and types an explicit confirmation phrase.
 | Unknown resolution rules | **NO TRADE** |
 | LIVE gate | **23 conditions**, all must pass, plus typed phrase |
 
-The hard limits are enforced by `RuntimeConfig` validators, not just documentation.
-Changing them raises `HardLimitError`. The dashboard cannot write them.
+The hard caps (2% risk %, 2 consecutive losses, 1 position, 1 entry per market, 120-second entry
+window) are enforced by `RuntimeConfig` validators, not just documentation. Exceeding them raises
+`HardLimitError`. Every other numeric setting has a range check, and the dashboard API answers
+`400` with the reason when a value is out of range. The daily loss limit and the cooldown length
+are dashboard-writable within their ranges.
 
 ---
 
@@ -109,8 +112,8 @@ Edit `config\runtime.json` and replace `"capital_usd": null` with a number, for 
 "capital_usd": 100
 ```
 
-This is the capital the risk limits are computed from (2% planned loss per trade; the daily loss
-limit is a fixed USDC amount, `daily_loss_limit_usd`), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` and does not trade.
+This is the capital the risk limits are computed from (2% planned loss per trade when sizing by risk %,
+see below; the daily loss limit is a fixed USDC amount, `daily_loss_limit_usd`), not your wallet balance. If it is unset the bot records `CAPITAL_UNSET` and does not trade.
 
 ### 6. Start the bot
 
@@ -243,17 +246,19 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
 
 - **No persistent disk.** The SQLite database, approved rules, paper trades, recordings and
   `runtime.json` live under `/tmp/polybot` and are lost on every restart, redeploy and spin-down.
-- **No Shell or SSH, and no dashboard.** `approve-rule`, `status` and `backup` cannot be run, and
-  `capital_usd` cannot be set. Until a rule is approved and capital is set the bot records NO TRADE:
-  it collects data and reports health but does not paper-trade.
+- **No Shell or SSH.** `approve-rule`, `status` and `backup` cannot be run; use the dashboard
+  (Rules and Settings pages) instead. The dashboard is reachable on the public URL once
+  `POLYBOT_DASHBOARD_PASSWORD_HASH` is set (see above).
 - **Spin-down and hours.** An idle service spins down after 15 minutes without inbound traffic. An
   UptimeRobot monitor keeps it awake, but the 750 free instance hours per month are shared by all
   free web services in the workspace, and one always-on service uses about 730 of them. When the
   hours run out, every free web service in the workspace is suspended until the next month.
 
-**Capital and rules are set by default.** Every start applies capital `5` (paper money) and
-auto-approves resolution rules in PAPER mode, so nothing has to be set after a restart. No Render
-variable is needed. Change capital, trade size, loss limits, rule auto-approval and every other
+**Capital and rules have defaults; the trading switch does not.** Every start applies capital `5`
+(paper money) when none is set and auto-approves resolution rules in PAPER mode, so neither has to
+be set after a restart. The master trading switch is OFF after every start (the settings file is wiped
+on the free plan), so open **Settings** and press **Turn ON** before the bot will open a paper trade.
+No Render variable is needed for any of this. Change capital, trade size, loss limits, rule auto-approval and every other
 trading option on the dashboard **Settings** page, not in environment variables.
 
 `.env` / Render variables hold only keys and passwords (dashboard hash and session secret, CLOB API
@@ -280,8 +285,9 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    ```
    Approval is recorded with an audit entry. Unknown or ambiguous rules stay blocked.
 3. Configure allocated capital in the dashboard or `config\runtime.json`.
-   Position size is derived from `capital × 2% / worst-case unit cost`; it is never
-   increased to satisfy the minimum order size.
+   With risk-% sizing (`trade_size_usd` = null) position size is derived from
+   `capital × 2% / worst-case unit cost`; it is never increased to satisfy the minimum order size.
+   The default is fixed-dollar sizing (below), where the 2% cap does not apply.
 
    **Capital vs balance:** `capital_usd` is the bankroll number the per-trade risk is based on;
    the balance is the actual cash (PAPER: virtual cash, LIVE: wallet USDC). In **LIVE**,
@@ -294,8 +300,10 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    (`2` → $2, `5` → $5). There is **no minimum capital**: the amount is whatever you set. It is
    still limited by the available balance, the $1 minimum order, the daily loss limit and the
    loss-streak guard. Set `trade_size_usd` to `null` (empty field) to size by risk % instead;
-   only that mode uses the `capital × 2%` cap. Positions under 5 shares cannot be sold early
-   and are held to resolution.
+   only that mode uses the `capital × 2%` cap. In fixed-dollar mode the planned loss can be a large
+   share of capital (a $1 trade on $5 capital risks about 20%). Exits are market (FOK) orders,
+   which have no minimum size, so a position of any size, including under 5 shares, can be sold
+   early.
 4. Leave the bot PAPER until you have enough real, recorded outcomes to judge it.
    No performance claim is made here.
 
@@ -449,9 +457,9 @@ dynamic take-profit, momentum-reversal and liquidity-deterioration rules, risk p
 heartbeat/recovery/gate, analytics, API auth/CSRF, Parquet/DuckDB, and an
 offline engine iteration using the fake exchange adapter.
 
-Actual last local result: **137 passed, 0 failed, 0 errors, 0 skipped** (Python 3.11,
-Windows, 24.3s). This number is recorded from the real run; it is not a profitability
-claim. See [docs/VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md) for scope and limitations.
+Test count: run `python -m pytest --collect-only -q | tail -1` for the current number (it
+changes as tests are added). Last recorded full run: all tests passed (Python 3.12, Linux). That
+is a statement about code behavior, not a profitability claim. See [docs/VALIDATION_REPORT.md](docs/VALIDATION_REPORT.md) for scope and limitations.
 
 ---
 

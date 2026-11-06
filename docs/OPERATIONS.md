@@ -85,25 +85,57 @@ Key fields:
 - `open_position`, `open_orders`, `paper_trades`, `live_trades`
 - `heartbeat.armed`, `heartbeat.consecutive_failures`
 
-Decision reason codes explain every NO TRADE. Common ones:
+Decision reason codes explain every NO TRADE. This table lists every `ReasonCode` (a test fails
+if one is missing):
 
 | Code | Meaning |
 |---|---|
+| `OK` | the step succeeded (used on activity-log entries such as fills; not a block) |
+| `TRADING_OFF` | the master trading switch is OFF (the default after a fresh start or restart); no new entries until you turn it ON in Settings. Open positions are still managed |
+| `CAPITAL_UNSET` | allocated capital is not configured |
 | `RECOVERY_NOT_READY` | startup reconciliation has not passed |
 | `FEED_UNHEALTHY` | BTC feed or Chainlink TWAP health is not fully healthy |
+| `STALE_DATA` / `STALE_BOOK` | data/book exceeds age limits |
 | `RULES_UNVERIFIED` | rule not registered, methodology unknown, or confidence too low |
 | `RULES_UNAPPROVED` | rule fingerprint awaits operator approval |
-| `CAPITAL_UNSET` | allocated capital is not configured |
-| `STALE_DATA` / `STALE_BOOK` | data/book exceeds age limits |
-| `LOW_PROBABILITY` | model probability below threshold or not confident enough |
-| `REGIME_BLOCKED` | volatility/trend regime disallows entries |
-| `SPREAD_TOO_WIDE` | spread exceeds limit |
-| `INSUFFICIENT_EDGE` / `NEGATIVE_EV` | fees/slippage/fee buffer leave no positive EV |
-| `SELL_NOT_FEASIBLE` | the position could not be exited with sufficient depth |
-| `BELOW_MIN_ORDER` | risk-based size is below the exchange minimum; never upsized |
+| `MARKET_NOT_ACTIVE` | the market has not started yet, so no entry is possible |
+| `MARKET_NOT_VALIDATED` | market metadata is missing (for an open position: exit management is skipped until it is back) |
 | `ENTRY_WINDOW_CLOSED` | past the hard 120-second entry cutoff |
-| `COOLDOWN` | after two consecutive losses |
+| `ENTRY_ALREADY_USED` | this market already had its one entry |
+| `ACTIVE_POSITION` | a position is already open (one at a time) |
+| `ORACLE_DATA_INSUFFICIENT` | features or probability could not be computed (not enough oracle/BTC data) |
+| `NO_SIGNAL` | the strategy produced no directional signal |
+| `LOW_PROBABILITY` | model probability below threshold or not confident enough |
+| `MTF_CONFLICT` | multi-timeframe signals disagree |
+| `REGIME_BLOCKED` | volatility/trend regime disallows entries |
+| `FILTER_FAILED` | an entry filter (for example spread or depth) rejected the trade |
+| `FILTER_UNAVAILABLE` | a filter could not be evaluated, so the entry fails closed |
+| `SPREAD_TOO_WIDE` | spread exceeds limit |
+| `INSUFFICIENT_DEPTH` | the ask side does not have enough depth for the order (or no ask liquidity); says nothing about EV |
+| `SLIPPAGE_TOO_HIGH` | expected fill price is worse than `max_slippage` allows, or the limit price would sit below the best ask; says nothing about EV |
+| `NEGATIVE_EV` | the trade loses money in expectation after fees, slippage and the fee buffer |
+| `INSUFFICIENT_EDGE` | expected value is positive but the net edge is below `min_net_edge` |
+| `FEES_UNVERIFIED` | the market metadata has no fee schedule, so costs cannot be computed |
+| `BELOW_MIN_ORDER` | risk-based size is below the exchange minimum; never upsized |
+| `RISK_LIMIT` | planned loss exceeds the risk budget, or an unresolved working order exists |
+| `INSUFFICIENT_BALANCE` | balance unavailable, or the planned cost exceeds the available balance |
+| `LATENCY_BREACH` | signal-to-order or order-to-result latency p95 is above `max_latency_p95_ms` |
+| `ACK_OUTSIDE_WINDOW` | too little time left to verify an order acknowledgement inside the entry window |
+| `NO_FILL` | the entry order was submitted but did not fill |
+| `SELL_NOT_FEASIBLE` | the position could not be exited with sufficient depth |
+| `COOLDOWN` | after `max_consecutive_losses` consecutive losses |
+| `CONSECUTIVE_LOSS_LIMIT` | the consecutive-loss limit is reached |
 | `DAILY_LOSS_LIMIT`, `PROFIT_LOCK`, `KILL_SWITCH` | protective stops |
+| `DUPLICATE_ORDER` | an order with the same idempotency key already exists. A failed exit is retried under a new attempt number; a dropped exit is logged as the `EXIT_DUPLICATE_ORDER` protection event |
+| `SYSTEM_BLOCKED` | reserved: defined, not emitted by the current engine |
+| `NOT_ARMED` | reserved: defined, not emitted by the current engine |
+| `CAPITAL_BELOW_MINIMUM` | reserved: defined, not emitted by the current engine |
+| `MARKET_VERSION_UNSUPPORTED` | reserved: defined, not emitted by the current engine |
+| `ORACLE_UNHEALTHY` | reserved: oracle health is reported as `FEED_UNHEALTHY` |
+| `ORACLE_UNVERIFIED` | reserved: defined, not emitted by the current engine |
+| `GEO_BLOCKED` | reserved: defined, not emitted by the current engine (geoblock is checked by the LIVE gate) |
+| `LIVE_GATE_FAILED` | reserved: defined, not emitted by the current engine (gate results are shown on the Go live page) |
+| `UNKNOWN_ERROR` | reserved: defined, not emitted by the current engine |
 
 ## First PAPER run
 
@@ -118,8 +150,10 @@ Decision reason codes explain every NO TRADE. Common ones:
    .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
    ```
 4. Set `capital_usd` in the dashboard or `config\runtime.json`. This is the allocated
-   capital, not the wallet balance. It is the basis for the 2% planned-loss cap. The daily
-   loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
+   capital, not the wallet balance. It is the basis for the 2% planned-loss cap, which applies only
+   when `trade_size_usd` is null; in the default fixed-dollar mode the cap is not applied (a $1
+   trade on $5 capital risks about 20%). The daily loss cap is a fixed USDC amount
+   (`daily_loss_limit_usd`).
 5. Do not judge the strategy from a handful of trades. The statistical validation gate
    requires real recorded outcomes; it fails honestly on an empty database.
 
