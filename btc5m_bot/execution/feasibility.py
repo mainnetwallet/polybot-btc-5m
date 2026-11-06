@@ -23,6 +23,9 @@ class ExitFeasibility:
     expected_exit_price: Decimal | None
     slippage_estimate: Decimal | None
     reasons: list[str] = field(default_factory=list)
+    # Worst (lowest) bid price that must be hit to sell the full size. A FOK SELL needs its
+    # min_price at or below this, otherwise the lower levels cannot match and the order fails.
+    worst_price: Decimal | None = None
 
 
 def assess_exit_feasibility(
@@ -38,7 +41,8 @@ def assess_exit_feasibility(
         )
     depth = sum((l.size for l in book.bids), Decimal(0))
     valid_qty = floor_to_step(min(shares, depth), SHARE_STEP)
-    avg, filled = book.avg_exec_price(Side.SELL, shares)
+    filled, notional, worst = book.walk(Side.SELL, shares)
+    avg = notional / filled if filled > 0 else Decimal(0)
     can_full = filled >= shares
     slip = (book.best_bid - avg) if filled > 0 else None
     reasons = []
@@ -58,4 +62,5 @@ def assess_exit_feasibility(
         avg if filled > 0 else None,
         slip,
         reasons,
+        worst_price=worst if filled > 0 else None,
     )

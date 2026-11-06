@@ -198,6 +198,16 @@ class Repository:
         with session_scope(self._sf) as s:
             return list(s.scalars(stmt))
 
+    def count_orders(self, *, market_id: str, mode: str, side: str) -> int:
+        """How many orders (any status) exist for this market/mode/side. Used to number exit attempts."""
+        stmt = (
+            select(func.count())
+            .select_from(OrderRow)
+            .where(OrderRow.market_id == market_id, OrderRow.mode == mode, OrderRow.side == side)
+        )
+        with session_scope(self._sf) as s:
+            return int(s.scalar(stmt) or 0)
+
     def open_orders(self, mode: str | None = None) -> list[OrderRow]:
         statuses = [
             OrderStatus.INTENDED.value,

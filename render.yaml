@@ -22,8 +22,9 @@
 #   * No persistent disk. The SQLite database, approved rules, paper trades, recordings and
 #     runtime.json live under /tmp/polybot and are lost on every restart, redeploy and spin-down.
 #   * No Shell/SSH, so CLI operator commands (approve-rule, status, backup) cannot be run; use the
-#     dashboard instead. Until a rule is approved and capital_usd is set the bot records
-#     NO TRADE: it collects data and reports health, but does not paper-trade.
+#     dashboard instead. Capital defaults to 5 and PAPER rules are auto-approved on every start, but
+#     the master trading switch is OFF after each start (runtime.json is wiped): turn it ON in the
+#     dashboard Settings or the bot records TRADING_OFF and opens nothing.
 #   * Idle services spin down after 15 minutes without inbound traffic. An UptimeRobot monitor
 #     keeps it awake, but the 750 free instance hours per month are shared by ALL free web
 #     services in the workspace; when they run out, every free service is suspended until next month.

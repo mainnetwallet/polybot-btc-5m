@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from ..exchange.fees import FeeSchedule, taker_fee
-from ..types import OrderBookSnapshot, Side
+from ..types import OrderBookSnapshot, ReasonCode, Side
 
 
 @dataclass
@@ -29,6 +29,8 @@ class EdgeEstimate:
     maker_net_edge: Decimal | None
     sufficient_depth: bool
     failure: str = ""
+    # Machine-readable cause of ``failure``: "DEPTH" (no book / no liquidity / too thin) or "SLIPPAGE".
+    failure_kind: str = ""
 
     @property
     def positive(self) -> bool:
@@ -48,17 +50,17 @@ def evaluate_edge(
     if book is None:
         return EdgeEstimate(outcome, probability, shares, Decimal(0), Decimal(0), Decimal(0), Decimal(0),
                             Decimal(0), fee_buffer, Decimal(0), Decimal(0), Decimal(0), Decimal(0), None,
-                            None, Decimal(0), None, False, "no order book")
+                            None, Decimal(0), None, False, "no order book", "DEPTH")
     best = book.best_ask
     if best is None:
         return EdgeEstimate(outcome, probability, shares, Decimal(0), Decimal(0), Decimal(0), Decimal(0),
                             Decimal(0), fee_buffer, Decimal(0), Decimal(0), Decimal(0), Decimal(0), None,
-                            None, Decimal(0), None, False, "no ask liquidity")
+                            None, Decimal(0), None, False, "no ask liquidity", "DEPTH")
     avg, filled = book.avg_exec_price(Side.BUY, shares)
     if filled <= 0:
         return EdgeEstimate(outcome, probability, shares, Decimal(0), best, Decimal(0), Decimal(0),
                             Decimal(0), fee_buffer, Decimal(0), Decimal(0), Decimal(0), Decimal(0), None,
-                            None, Decimal(0), None, False, "no fillable depth")
+                            None, Decimal(0), None, False, "no fillable depth", "DEPTH")
     slippage = avg - best
     entry_fee = taker_fee(filled, avg, schedule)
     fee_ps = entry_fee / filled if filled > 0 else Decimal(0)
@@ -78,10 +80,13 @@ def evaluate_edge(
             maker_edge = Decimal(str(probability)) - (maker_price + maker_fee_ps + fee_buffer)
 
     failure = ""
+    failure_kind = ""
     if filled < shares:
         failure = f"insufficient depth: {filled}/{shares}"
+        failure_kind = "DEPTH"
     elif slippage > max_slippage:
         failure = f"slippage {slippage} > {max_slippage}"
+        failure_kind = "SLIPPAGE"
 
     return EdgeEstimate(
         outcome=outcome,
@@ -103,4 +108,21 @@ def evaluate_edge(
         maker_net_edge=maker_edge,
         sufficient_depth=filled >= shares,
         failure=failure,
+        failure_kind=failure_kind,
     )
+
+
+def rejection_reason(edge: EdgeEstimate) -> ReasonCode:
+    """Why an entry was refused on edge grounds, as an accurate reason code.
+
+    Depth and slippage problems say nothing about EV, so they must not be reported as NEGATIVE_EV.
+    NEGATIVE_EV means the trade loses money in expectation; INSUFFICIENT_EDGE means it is positive
+    but below the configured minimum net edge.
+    """
+    if edge.failure_kind == "DEPTH":
+        return ReasonCode.INSUFFICIENT_DEPTH
+    if edge.failure_kind == "SLIPPAGE":
+        return ReasonCode.SLIPPAGE_TOO_HIGH
+    if edge.net_edge <= 0 or edge.ev_total <= 0:
+        return ReasonCode.NEGATIVE_EV
+    return ReasonCode.INSUFFICIENT_EDGE

@@ -90,6 +90,7 @@ def test_validation_fails_honestly_on_empty_database(repo):
 class StubRisk:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.reset_result: dict | None = None
 
     def engage_kill_switch(self, reason, *, actor="system", detail=None):
         self.calls.append(("engage", reason))
@@ -99,6 +100,7 @@ class StubRisk:
 
     def reset_day_lock(self, *, actor, reason):
         self.calls.append(("reset", reason))
+        return self.reset_result
 
 
 class StubEngine:
@@ -196,6 +198,19 @@ def test_operator_controls_require_typed_phrases(client):
     assert test_client.post("/api/live/revoke", json={"phrase": "REVOKE LIVE"}, headers=headers).status_code == 200
     assert engine.risk.calls == [("engage", "drill"), ("clear", "")]
     assert engine.revocations == ["operator"]
+
+
+def test_reset_day_reports_whether_the_lock_will_come_back(client):
+    test_client, engine, _ = client
+    headers = login(test_client)
+    engine.risk.reset_result = {
+        "was_locked": True, "will_relock": True, "daily_pnl": "-1.60", "daily_loss_limit": "1.50",
+    }
+    res = test_client.post("/api/control/reset-day", json={"phrase": "RESET DAY"}, headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True and body["will_relock"] is True
+    assert body["daily_pnl"] == "-1.60"
 
 
 def test_live_activation_requires_the_exact_phrase(client):
@@ -347,3 +362,56 @@ def test_activity_clear_deletes_on_click_without_typed_phrase(client, repo):
     ok = test_client.post("/api/activity/clear", json={"action": "decisions"}, headers=headers)
     assert ok.status_code == 200 and ok.json()["removed"] == 1
     assert repo.recent_decisions(10) == []
+
+
+def test_config_api_returns_400_for_out_of_range_tunables(client):
+    test_client, _, store = client
+    headers = login(test_client)
+    before = store.snapshot().cooldown_minutes
+    for patch in ({"cooldown_minutes": 0}, {"trailing_stop_pct": "1.5"}, {"min_oracle_coverage_seconds": 0}):
+        response = test_client.post("/api/config", json={"patch": patch}, headers=headers)
+        assert response.status_code == 400, patch
+        assert "invalid configuration" in response.json()["detail"]
+    assert store.snapshot().cooldown_minutes == before
+
+
+# ---------------------------------------------------------------- strict JSON
+# profit_factor used to be math.inf when a run had no losing trade (and for all-flat runs). inf is
+# not valid JSON. The HTTP endpoints hide it (pydantic turns inf into null) but the websocket
+# stream uses json.dumps, which wrote a literal ``Infinity`` the browser's JSON.parse rejects.
+@pytest.mark.parametrize("pnls", [["5.00"], ["5.00", "1.00"], ["0", "0"]])
+def test_performance_summary_is_strict_json_without_losses(pnls):
+    import json
+
+    summary = compute_performance([trade(p, day=i) for i, p in enumerate(pnls)])
+    assert summary.profit_factor is None  # undefined without a loss, never infinity
+    json.dumps(summary.as_dict(), allow_nan=False)
+
+
+def test_stream_pushes_strict_json_when_analytics_has_no_losses(client):
+    import json
+
+    def reject_constant(name):  # what a browser's JSON.parse does with Infinity / NaN
+        raise ValueError(f"non-standard JSON constant {name}")
+
+    test_client, engine, _ = client
+    login(test_client)
+    analytics = {"paper": compute_performance([trade("5.00")]).as_dict()}
+    engine.state = SimpleNamespace(snapshot=lambda: {"mode": "PAPER", "analytics": analytics})
+    with test_client.websocket_connect("/api/stream") as ws:
+        raw = ws.receive_text()
+    message = json.loads(raw, parse_constant=reject_constant)
+    assert message["state"]["analytics"]["paper"]["profit_factor"] is None
+
+
+def test_statistical_gate_threshold_is_not_dashboard_writable(client):
+    # paper_validation_min_trades feeds the LIVE statistical gate. Lowering it to 1 from the
+    # dashboard would let a handful of trades pass validation, so it is config-file only.
+    test_client, _engine, store = client
+    headers = login(test_client)
+    before = store.snapshot().paper_validation_min_trades
+    response = test_client.post("/api/config", json={"patch": {"paper_validation_min_trades": 1}}, headers=headers)
+    assert response.status_code == 400
+    assert "paper_validation_min_trades" in response.json()["detail"]
+    assert store.snapshot().paper_validation_min_trades == before
+    assert "paper_validation_min_trades" not in test_client.get("/static/app.js").text

@@ -27,6 +27,7 @@
   "liquidity_exit_spread_multiple": 2.0,
   "time_exit_seconds_before_end": 30,
   "min_oracle_coverage_seconds": 60,
+  "auto_approve_rules": true,
   "require_rules_approval": true,
   "live_validation_min_markets": 20,
   "paper_validation_min_trades": 300,

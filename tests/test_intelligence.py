@@ -184,3 +184,37 @@ def test_probability_confidence_reflects_quality():
         rule_confidence="LOW",
     )
     assert low is not None and low.confidence == "LOW"
+
+
+@pytest.mark.parametrize("rem", [30.0, 60.0, 90.0, 180.0, 240.0, 300.0])
+def test_sigma_matches_the_variance_of_a_future_60s_twap(rem):
+    """sigma is the sd of the final 60 s TWAP of a random walk. For rem > 60 the whole window is still
+    ahead, so Var = rem - 2*60/3 (verified by Monte Carlo); the old constant sqrt(60/3) was ~3x too small."""
+    engine = ProbabilityEngine(min_coverage_seconds=60)
+    regime = RegimeState(Regime.TRENDING, 0.9, [], changed_at=NOW)
+    vol, price = 0.0002, 100000.0
+    est = engine.estimate(features(remaining_seconds=rem, realized_vol_60s=vol), regime, rule_confidence="HIGH")
+    assert est is not None
+    expected = rem ** 1.5 / 3 ** 0.5 / 60 if rem <= 60 else (rem - 2 * 60 / 3) ** 0.5
+    assert est.sigma == pytest.approx(price * vol * expected, rel=1e-9)
+
+
+def test_sigma_grows_with_remaining_time_and_is_continuous_at_the_window_edge():
+    engine = ProbabilityEngine(min_coverage_seconds=60)
+    regime = RegimeState(Regime.TRENDING, 0.9, [], changed_at=NOW)
+
+    def sigma(rem):
+        return engine.estimate(features(remaining_seconds=rem), regime, rule_confidence="HIGH").sigma
+
+    values = [sigma(r) for r in (45, 60, 61, 120, 180, 300)]
+    assert values == sorted(values) and len(set(values)) == len(values)
+    assert sigma(60.0001) == pytest.approx(sigma(60.0), rel=1e-4)
+
+
+def test_early_in_the_window_the_model_is_less_confident_than_late():
+    """Same distance from the opening reference: more time left means more uncertainty."""
+    engine = ProbabilityEngine(min_coverage_seconds=60)
+    regime = RegimeState(Regime.TRENDING, 1.0, [], changed_at=NOW)
+    early = engine.estimate(features(remaining_seconds=290.0), regime, rule_confidence="HIGH")
+    late = engine.estimate(features(remaining_seconds=70.0), regime, rule_confidence="HIGH")
+    assert early.details["raw_p"] < late.details["raw_p"]

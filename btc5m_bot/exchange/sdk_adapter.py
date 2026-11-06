@@ -171,9 +171,13 @@ class PolymarketAdapter(ExchangeAdapter):
             book = await client.get_order_book(token_id=asset_id)
         except Exception as exc:
             raise ExchangeError(f"order book fetch failed: {exc}") from exc
+        if not book.timestamp:
+            # Substituting the local clock would make every book look fresh and defeat the
+            # max_book_age_ms check. Without a provider timestamp the age is unknown: refuse it.
+            raise ExchangeError("order book response has no timestamp; age cannot be verified")
         return OrderBookSnapshot(
             asset_id=str(book.asset_id),
-            timestamp=as_utc(book.timestamp) if book.timestamp else datetime.now(timezone.utc),
+            timestamp=as_utc(book.timestamp),
             bids=tuple(BookLevel(price=_to_decimal(l.price), size=_to_decimal(l.size)) for l in book.bids),
             asks=tuple(BookLevel(price=_to_decimal(l.price), size=_to_decimal(l.size)) for l in book.asks),
             tick_size=_to_decimal(book.tick_size, "0.01"),
@@ -346,8 +350,13 @@ class PolymarketAdapter(ExchangeAdapter):
         client = await self._secure_client()
         try:
             item = await client.get_order(order_id=order_id)
-        except Exception:
-            return None
+        except Exception as exc:
+            # Only an explicit 404 proves the order is unknown. A timeout or any other failure
+            # says nothing about the order, so it must not look like "not found": callers
+            # (recovery) treat None as evidence and an error as "cannot verify, stay blocked".
+            if getattr(exc, "status", None) == 404:
+                return None
+            raise ExchangeError(f"order lookup failed: {exc}") from exc
         if item is None:
             return None
         return ExchangeOpenOrder(

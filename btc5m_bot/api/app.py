@@ -68,7 +68,6 @@ CONFIG_WRITABLE = {
     "fee_buffer",
     "auto_approve_rules",
     "min_order_notional_usd",
-    "paper_validation_min_trades",
 }
 
 PHRASES = {
@@ -366,10 +365,10 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
     ) -> dict[str, Any]:
         if body.phrase.strip() != PHRASES["reset_day"]:
             raise HTTPException(status_code=400, detail="typed confirmation must be 'RESET DAY'")
-        await asyncio.to_thread(
+        result = await asyncio.to_thread(
             engine.risk.reset_day_lock, actor=_actor(request, session), reason=body.reason or "operator"
         )
-        return {"ok": True}
+        return {"ok": True, **(result if isinstance(result, dict) else {})}
 
     @app.post("/api/activity/clear")
     async def clear_activity(

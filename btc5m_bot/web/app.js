@@ -675,8 +675,10 @@ $("kill-clear").addEventListener("click", async () => {
 
 $("reset-day").addEventListener("click", async () => {
   try {
-    await post("/api/control/reset-day", { phrase: $("reset-phrase").value, reason: "operator reset" });
-    report("day lock reset");
+    const res = await post("/api/control/reset-day", { phrase: $("reset-phrase").value, reason: "operator reset" });
+    report(res && res.will_relock
+      ? "day lock cleared, but daily P&L (" + res.daily_pnl + ") is still at the loss limit (-" + res.daily_loss_limit + ") so it will re-lock on the next entry check"
+      : "day lock reset");
     $("reset-phrase").value = "";
   } catch (err) { report("reset failed: " + err.message); }
 });
@@ -1004,7 +1006,6 @@ const ADV_FIELDS = [
   { key: "taker_delay_ms", label: "Paper taker delay (ms)", kind: "num", step: "1" },
   { key: "fee_buffer", label: "Fee buffer (USDC per share)", kind: "num", step: "0.001" },
   { key: "min_order_notional_usd", label: "Exchange minimum order (USDC, empty = share minimum)", kind: "num", step: "0.01", nullable: true },
-  { key: "paper_validation_min_trades", label: "Paper validation: min trades", kind: "num", step: "1" },
 ];
 
 function buildAdvancedFields() {

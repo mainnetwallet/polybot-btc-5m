@@ -72,6 +72,12 @@ def test_lease_must_be_fresh_healthy_and_not_from_the_future(clock, repo):
     assert not ok and "future" in detail
 
 
+def _send_ready(settings, repo):
+    """Settings + recorded test under which the worker's send-time safety re-check passes."""
+    repo.set_state("heartbeat_test", {"ok": True})
+    return settings.model_copy(update={"heartbeat_enabled": True, "heartbeat_dedicated_key_confirmed": True})
+
+
 def test_heartbeat_never_sends_when_live_is_not_authorised(clock, repo, settings, adapter):
     lease = LeaseManager(repo, clock)
     lease.renew(engine_pid=42)
@@ -98,7 +104,7 @@ def test_heartbeat_requires_a_valid_lease_then_rotates_id(clock, repo, settings,
     lease = LeaseManager(repo, clock)
     worker = HeartbeatWorker(
         repo=repo,
-        settings=settings.model_copy(update={"heartbeat_enabled": True}),
+        settings=_send_ready(settings, repo),
         clock=clock,
         lease=lease,
         adapter_factory=lambda: adapter,
@@ -130,7 +136,7 @@ def test_heartbeat_failure_is_recorded_not_raised(clock, repo, settings):
 
     worker = HeartbeatWorker(
         repo=repo,
-        settings=settings.model_copy(update={"heartbeat_enabled": True}),
+        settings=_send_ready(settings, repo),
         clock=clock,
         lease=lease,
         adapter_factory=lambda: FailingAdapter(),
@@ -268,3 +274,56 @@ def test_live_gate_blocks_unsafe_geo_balance_and_heartbeat(repo):
                for c in gate.evaluate(_passing_context(heartbeat_tested=False)).conditions)
     assert any(c.key == "recovery_ready" and not c.passed
                for c in gate.evaluate(_passing_context(recovery_ready=False)).conditions)
+
+
+# ------------------------------------------------ send-time safety re-check (finding 3)
+@pytest.mark.parametrize(
+    "mutation, expected",
+    [
+        ({"heartbeat_enabled": False}, "heartbeat_enabled"),
+        ({"heartbeat_dedicated_key_confirmed": False}, "dedicated_key"),
+        ({"heartbeat_interval_seconds": 2}, "interval"),
+        ({"heartbeat_lease_seconds": 12}, "lease_window"),
+    ],
+)
+def test_heartbeat_rechecks_configuration_at_send_time(clock, repo, settings, adapter, mutation, expected):
+    lease = LeaseManager(repo, clock)
+    lease.renew(engine_pid=7)
+    worker = HeartbeatWorker(
+        repo=repo,
+        settings=_send_ready(settings, repo).model_copy(update=mutation),
+        clock=clock,
+        lease=lease,
+        adapter_factory=lambda: adapter,
+        live_allowed=lambda: True,
+    )
+    asyncio.run(worker._send_once())
+    assert adapter.heartbeat_ids == []
+    assert expected in repo.get_state("heartbeat_skipped")["reason"]
+
+
+def test_heartbeat_does_not_send_without_a_recorded_arm_test(clock, repo, settings, adapter):
+    lease = LeaseManager(repo, clock)
+    lease.renew(engine_pid=7)
+    ready = _send_ready(settings, repo)
+    repo.set_state("heartbeat_test", {})  # the recorded test is gone
+    worker = HeartbeatWorker(
+        repo=repo, settings=ready, clock=clock, lease=lease,
+        adapter_factory=lambda: adapter, live_allowed=lambda: True,
+    )
+    asyncio.run(worker._send_once())
+    assert adapter.heartbeat_ids == []
+    assert "heartbeat_test" in repo.get_state("heartbeat_skipped")["reason"]
+
+
+def test_heartbeat_does_not_send_when_credentials_disappear(clock, repo, settings, adapter):
+    lease = LeaseManager(repo, clock)
+    lease.renew(engine_pid=7)
+    no_creds = _send_ready(settings, repo).model_copy(update={"clob_api_passphrase": None})
+    worker = HeartbeatWorker(
+        repo=repo, settings=no_creds, clock=clock, lease=lease,
+        adapter_factory=lambda: adapter, live_allowed=lambda: True,
+    )
+    asyncio.run(worker._send_once())
+    assert adapter.heartbeat_ids == []
+    assert "credentials_present" in repo.get_state("heartbeat_skipped")["reason"]

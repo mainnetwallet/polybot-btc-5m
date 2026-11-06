@@ -38,7 +38,7 @@ from .execution.journal import OrderJournal
 from .execution.paper import PaperBroker
 from .exits import ExitAction, HybridExitManager
 from .heartbeat import HeartbeatWorker, LeaseManager, validate_heartbeat_configuration
-from .intelligence.ev import evaluate_edge
+from .intelligence.ev import evaluate_edge, rejection_reason
 from .intelligence.features import FeatureSnapshot, compute_features
 from .intelligence.filters import FilterEngine, FilterReport
 from .intelligence.probability import ProbabilityEngine, ProbabilityEstimate
@@ -198,6 +198,19 @@ class BotEngine:
     def _config(self) -> RuntimeConfig:
         return self.config_store.snapshot()
 
+    def _sync_runtime_config(self) -> None:
+        """Push dashboard-editable settings into components that copied them at construction.
+
+        ``taker_delay_ms`` and ``min_oracle_coverage_seconds`` are writable from the dashboard, but
+        the paper broker, execution engine and probability model each took a copy in ``__init__``,
+        so edits silently did nothing until a restart.
+        """
+        cfg = self._config()
+        self.execution.taker_delay_ms = cfg.taker_delay_ms
+        if self.paper is not None:
+            self.paper.taker_delay_ms = cfg.taker_delay_ms
+        self.probability_engine.min_coverage_seconds = float(cfg.min_oracle_coverage_seconds)
+
     def _active_market(self, now: datetime) -> MarketStateMachine | None:
         candidates = [m for m in self._machines.values() if m.start <= now < m.end]
         return max(candidates, key=lambda m: m.start) if candidates else None
@@ -271,6 +284,7 @@ class BotEngine:
 
     async def _iteration(self) -> None:
         now = self.clock.now()
+        self._sync_runtime_config()
         self._refresh_mode()
         if self._config().mode is Mode.LIVE and (
             self._gate_report is None or self.clock.monotonic() - self._gate_at_mono > GATE_REFRESH_SECONDS
@@ -775,9 +789,9 @@ class BotEngine:
         if cfg.require_rules_approval and not rule.approved:
             self._note(now, "NO_TRADE", ReasonCode.RULES_UNAPPROVED, f"rule {rule.fingerprint[:12]} awaiting user approval")
             return
-        if self.risk.status(self._effective_mode, balance=self._balance).allowed is False:
-            status = self.risk.status(self._effective_mode, balance=self._balance)
-            self._note(now, "NO_TRADE", status.reason, status.detail)
+        risk_gate = self.risk.status(self._effective_mode, balance=self._balance, now=now)
+        if not risk_gate.allowed:
+            self._note(now, "NO_TRADE", risk_gate.reason, risk_gate.detail)
             return
         if self._features is None or self._probability is None or self._regime is None:
             self._note(now, "NO_TRADE", ReasonCode.ORACLE_DATA_INSUFFICIENT, "features/probability unavailable")
@@ -863,7 +877,7 @@ class BotEngine:
             self._note(
                 now,
                 "NO_TRADE",
-                ReasonCode.INSUFFICIENT_EDGE if edge.failure == "" else ReasonCode.NEGATIVE_EV,
+                rejection_reason(edge),
                 f"net edge {edge.net_edge} (min {cfg.min_net_edge}); {edge.failure}",
                 probability=p.p_up,
                 edge=edge.net_edge,
@@ -967,7 +981,7 @@ class BotEngine:
                 probability=p.p_up,
                 edge=edge.net_edge,
             )
-        self._publish(now)
+        await self._publish(now)
 
     # ------------------------------------------------------------------- exits
     def _log_hold(self, now: datetime, position, decision) -> None:
@@ -1057,7 +1071,19 @@ class BotEngine:
         )
         try:
             outcome_result = await self.execution.execute_exit(intent, market, up_book if position.outcome.upper() == "UP" else down_book, position)
-        except DuplicateOrderError:
+        except DuplicateOrderError as exc:
+            # An exit that is silently dropped can leave a losing position open. Make it visible.
+            log.error("exit order rejected as duplicate (%s): market=%s reason=%s", exc, position.market_id, decision.reason)
+            self.repo.add_protection_event(
+                "EXIT_DUPLICATE_ORDER",
+                "ERROR",
+                market_id=position.market_id,
+                reason=decision.reason,
+                shares=str(decision.shares),
+                limit_price=str(decision.limit_price),
+                idempotency_key=str(exc)[:80],
+            )
+            self._note(now, "EXIT", ReasonCode.OK, f"exit {decision.reason} dropped as duplicate order; will retry")
             return
         if outcome_result.result.filled_shares > 0:
             self.state.increment("exits")
@@ -1107,7 +1133,10 @@ class BotEngine:
                 continue
             market = machine.market
             mono = self.clock.monotonic()
-            if market.market_id not in self._simulations and mono - self._last_simulation.get(market.market_id, 0.0) > 5:
+            # An invalid result (oracle coverage still short, late TWAP data, changed threshold) is
+            # kept for display but must not stop us trying again: only a *valid* one is final.
+            sim_now = self._simulations.get(market.market_id)
+            if (sim_now is None or not sim_now[1].valid) and mono - self._last_simulation.get(market.market_id, 0.0) > 5:
                 self._last_simulation[market.market_id] = mono
                 self._attempt_simulation(machine, now)
             actual = None
@@ -1150,6 +1179,7 @@ class BotEngine:
             machine.end,
             min_coverage_seconds=self._config().min_oracle_coverage_seconds,
         )
+        previous = self._simulations.get(market.market_id)
         self._simulations[market.market_id] = (spec, result)
         if result.valid:
             self.repo.update_window(
@@ -1172,7 +1202,9 @@ class BotEngine:
             )
             log.info("resolution simulation %s -> %s (coverage %.0f%%)", market.market_id, result.outcome, result.coverage_pct)
         else:
-            log.info("resolution simulation %s unavailable: %s", market.market_id, result.reason)
+            # Retried every few seconds: log the first miss and any change of reason, not every retry.
+            if previous is None or previous[1].reason != result.reason:
+                log.info("resolution simulation %s unavailable: %s", market.market_id, result.reason)
 
     def _record_actual(self, market_id: str, actual: str) -> None:
         sim = self._simulations.get(market_id)
@@ -1778,6 +1810,7 @@ class BotEngine:
             "fee_per_share": _dec(edge.fee_per_share),
             "sufficient_depth": edge.sufficient_depth,
             "failure": edge.failure,
+            "failure_kind": edge.failure_kind,
         }
 
     @staticmethod

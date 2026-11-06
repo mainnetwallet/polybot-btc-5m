@@ -20,7 +20,7 @@ from .exchange.fees import FeeSchedule, taker_fee
 from .execution.feasibility import ExitFeasibility, assess_exit_feasibility
 from .intelligence.features import FeatureSnapshot
 from .intelligence.probability import ProbabilityEstimate
-from .types import FeatureMode, MarketInfo, OrderBookSnapshot, Outcome, as_utc, utcnow
+from .types import FeatureMode, MarketInfo, OrderBookSnapshot, Outcome, as_utc, floor_to_step, utcnow
 
 
 class ExitAction(str, Enum):
@@ -87,13 +87,20 @@ class HybridExitManager:
                 shadow_reason=reason,
                 **kwargs,
             )
+        # FOK SELL: min_price is the worst price the exchange may fill at. It must reach the deepest
+        # bid level that feasibility counted on, or the lower levels cannot match and the exit fails.
+        # Floor to the tick grid (the SDK rejects off-grid prices); never above the best bid.
+        limit = feasibility.worst_price if feasibility.worst_price is not None else book.best_bid
+        limit = min(floor_to_step(limit, market.tick_size), book.best_bid)
+        if limit <= 0:
+            limit = book.best_bid
         return ExitDecision(
             ExitAction.SELL,
             reason,
             detail,
             priority,
             shares=position.shares,
-            limit_price=book.best_bid,
+            limit_price=limit,
             feasibility=feasibility,
             **kwargs,
         )

@@ -73,6 +73,7 @@ polybot.egg-info/entry_points.txt
 polybot.egg-info/requires.txt
 polybot.egg-info/top_level.txt
 tests/test_analytics_api.py
+tests/test_audit_regressions.py
 tests/test_backfill.py
 tests/test_clear_activity.py
 tests/test_data_package.py
