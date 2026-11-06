@@ -254,10 +254,19 @@ From [Render's free-tier docs](https://render.com/docs/free). They decide what t
   free web services in the workspace, and one always-on service uses about 730 of them. When the
   hours run out, every free web service in the workspace is suspended until the next month.
 
+**Keep your Settings across restarts (recommended).** Create a free Postgres (Render Postgres, Neon or
+Supabase) and paste its connection URL into the Render variable `POLYBOT_SETTINGS_DATABASE_URL`
+(`DATABASE_URL` also works). Every save on the Settings page is then committed to that database first
+and loaded again on every start, so capital, trade size, limits, strategy, feature switches and the
+trading ON/OFF switch survive restarts, redeploys and spin-downs. If the database cannot be written the
+save is rejected with an error instead of silently reverting later. The Settings page shows whether saves
+are durable. Only the settings row lives in that database; paper trades and rules stay in the local
+SQLite file. Without the variable the behaviour below applies.
+
 **Capital and rules have defaults; the trading switch does not.** Every start applies capital `5`
 (paper money) when none is set and auto-approves resolution rules in PAPER mode, so neither has to
-be set after a restart. The master trading switch is OFF after every start (the settings file is wiped
-on the free plan), so open **Settings** and press **Turn ON** before the bot will open a paper trade.
+be set after a restart. Without a settings database the master trading switch is OFF after every start (the settings file is
+wiped on the free plan), so open **Settings** and press **Turn ON** before the bot will open a paper trade.
 No Render variable is needed for any of this. Change capital, trade size, loss limits, rule auto-approval and every other
 trading option on the dashboard **Settings** page, not in environment variables.
 

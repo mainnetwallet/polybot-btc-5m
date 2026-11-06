@@ -32,7 +32,7 @@ def _repo(settings: Settings) -> tuple[Repository, object]:
 def cmd_init(args: argparse.Namespace) -> int:
     settings = _settings()
     repo, db = _repo(settings)
-    store = ConfigStore(settings.runtime_config_file)
+    store = ConfigStore.from_settings(settings)
     cfg = store.snapshot()
     db.dispose()
     print(f"initialised database: {settings.db_path}")
@@ -86,7 +86,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         risk = repo.get_risk_state()
         position = repo.open_position("LIVE") or repo.open_position("PAPER")
         payload = {
-            "mode": ConfigStore(settings.runtime_config_file).snapshot().mode.value,
+            "mode": ConfigStore.from_settings(settings).snapshot().mode.value,
             "live_activation": repo.active_live_activation() is not None,
             "supervisor": supervisor,
             "recovery": repo.get_state("recovery"),

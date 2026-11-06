@@ -313,6 +313,8 @@ td.empty { padding: 28px 14px; text-align: center; color: var(--muted); border-b
 #settings-msg.dirty { color: var(--warn); }
 #settings-msg.saved { color: var(--up); }
 #settings-msg.err { color: var(--down); }
+#settings-storage.saved { color: var(--up); }
+#settings-storage.err { color: var(--down); }
 
 /* ------------------------------------------------------------------- toasts */
 .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: grid; gap: 8px; width: min(380px, calc(100vw - 40px)); pointer-events: none; }

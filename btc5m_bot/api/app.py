@@ -315,7 +315,12 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
     @app.get("/api/config")
     async def get_config(session: Session = Depends(_session)) -> dict[str, Any]:
         cfg = config_store.snapshot()
-        return {"ok": True, "config": cfg.model_dump(mode="json"), "revision": config_store.revision}
+        return {
+            "ok": True,
+            "config": cfg.model_dump(mode="json"),
+            "revision": config_store.revision,
+            "storage": config_store.storage,
+        }
 
     @app.post("/api/config")
     async def set_config(
@@ -328,6 +333,9 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
             old, new = await asyncio.to_thread(config_store.update, body.patch)
         except HardLimitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            # The settings database could not be written: nothing was changed, say so plainly.
+            raise HTTPException(status_code=503, detail=f"not saved: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"invalid configuration: {exc}") from exc
         await asyncio.to_thread(
@@ -336,7 +344,12 @@ def create_app(*, engine: Any, repo: Any, settings: Settings, config_store: Conf
             actor=_actor(request, session),
             detail={"changed": sorted(body.patch)},
         )
-        return {"ok": True, "config": new.model_dump(mode="json"), "revision": config_store.revision}
+        return {
+            "ok": True,
+            "config": new.model_dump(mode="json"),
+            "revision": config_store.revision,
+            "storage": config_store.storage,
+        }
 
     @app.get("/api/gate")
     async def gate(session: Session = Depends(_session)) -> dict[str, Any]:

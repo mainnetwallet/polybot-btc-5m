@@ -935,6 +935,7 @@ async function loadTab(name) {
       const r = await api("/api/config");
       fillSettingsForm(r.config);
       setSettingsMsg("", "muted");
+      showSettingsStorage(r.storage);
     }
   } catch (err) {
     report("tab load failed: " + err.message);
@@ -1167,6 +1168,7 @@ $("settings-form").addEventListener("submit", async (event) => {
   try {
     const r = await post("/api/config", { patch });
     fillSettingsForm(r.config);   // show what the server really stored (normalised / clamped values)
+    showSettingsStorage(r.storage);
     if (skipped.length) {
       setSettingsMsg("Saved. Left unchanged (empty): " + skipped.join(", "), "saved");
     } else {
@@ -1178,6 +1180,19 @@ $("settings-form").addEventListener("submit", async (event) => {
     report("save failed: " + err.message);
   }
 });
+
+/* Say where saves go. Without a settings database the host may wipe runtime.json on restart. */
+function showSettingsStorage(storage) {
+  const node = $("settings-storage");
+  if (!node || !storage) return;
+  if (storage.durable) {
+    node.textContent = "Saved to the database: settings survive restarts and redeploys.";
+    node.className = "small saved";
+  } else {
+    node.textContent = "Saved to a local file only: a host without a disk loses them on restart. Set DATABASE_URL to keep them.";
+    node.className = "small err";
+  }
+}
 
 /* Tell the operator when the form differs from what is stored. Values loaded by loadTab() are
    set from code, which fires no input event, so only real edits mark the form as changed. */

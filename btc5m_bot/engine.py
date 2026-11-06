@@ -2008,7 +2008,7 @@ def build_default_engine(settings: Settings, *, start_api: bool = True) -> tuple
     db_engine = make_engine(settings.db_path)
     init_db(db_engine)
     repo = Repository(make_session_factory(db_engine))
-    config_store = ConfigStore(settings.runtime_config_file)
+    config_store = ConfigStore.from_settings(settings)
     if settings.default_capital_usd is not None and config_store.snapshot().capital_usd is None:
         config_store.set_capital(settings.default_capital_usd)
         repo.audit(
@@ -2084,6 +2084,7 @@ async def run_engine(settings: Settings, *, start_api: bool = True) -> None:
     try:
         await engine.run()
     finally:
+        engine.config_store.close()
         db_engine.dispose()
 
 

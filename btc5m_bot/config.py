@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .types import FeatureMode, Mode
+
+log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -371,6 +375,9 @@ class Settings(BaseSettings):
         # An empty "POLYBOT_X=" line means "not set". Without this it loads as an empty
         # string, so the "is None" guards (e.g. the dashboard password check) never fire.
         env_ignore_empty=True,
+        # Settings.model_dump() is handed to the engine subprocess as Settings(**dict); fields that
+        # declare an alias must also be accepted under their own name there.
+        populate_by_name=True,
     )
 
     project_root: Path = BASE_DIR
@@ -400,6 +407,16 @@ class Settings(BaseSettings):
     clob_api_key: SecretStr | None = None
     clob_api_secret: SecretStr | None = None
     clob_api_passphrase: SecretStr | None = None
+
+    # Durable home for the dashboard Settings page. On hosts without a persistent disk (Render free)
+    # runtime.json is wiped on every restart, so every saved setting would be lost. Point this at any
+    # always-on database (Render Postgres, Neon, Supabase, ...) and every Settings save is written there
+    # first and loaded again on start. POLYBOT_SETTINGS_DATABASE_URL, or the standard DATABASE_URL that
+    # Render injects when a Postgres is linked. Unset = settings live in runtime.json only.
+    settings_database_url: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("POLYBOT_SETTINGS_DATABASE_URL", "DATABASE_URL", "settings_database_url"),
+    )
 
     # Persistent defaults. On hosts without a persistent disk (Render free) runtime.json and the
     # database are wiped on every restart, so capital and rule approvals would have to be set
@@ -492,29 +509,152 @@ class Settings(BaseSettings):
             path.mkdir(parents=True, exist_ok=True)
 
 
-class ConfigStore:
-    """Thread-safe, atomic persistence for RuntimeConfig."""
+def normalize_database_url(url: str) -> str:
+    """Accept the URL forms hosts hand out and return one SQLAlchemy can use.
 
-    def __init__(self, path: Path) -> None:
+    Render and Heroku give `postgres://...`; SQLAlchemy 2 needs a dialect name, and we ship psycopg 3.
+    """
+    url = url.strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
+class SettingsDatabase:
+    """Durable key/value row for RuntimeConfig, kept in an external database.
+
+    Only the dashboard settings live here (one small JSON document). Trading data stays in the local
+    SQLite file, so a database outage can never touch order handling, only saving/loading settings.
+    """
+
+    KEY = "runtime_config"
+    TABLE = "polybot_settings"
+
+    def __init__(self, url: str) -> None:
+        from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, create_engine
+
+        self.url = normalize_database_url(url)
+        kwargs: dict[str, Any] = {"future": True, "pool_pre_ping": True, "pool_recycle": 240}
+        if self.url.startswith("sqlite"):
+            kwargs["connect_args"] = {"timeout": 30, "check_same_thread": False}
+        self.engine = create_engine(self.url, **kwargs)
+        self._meta = MetaData()
+        self._table = Table(
+            self.TABLE,
+            self._meta,
+            Column("key", String(64), primary_key=True),
+            Column("value", Text, nullable=False),
+            Column("updated_at", DateTime, nullable=False),
+        )
+        self._ready = False
+
+    def _ensure(self) -> None:
+        if not self._ready:
+            self._meta.create_all(self.engine)
+            self._ready = True
+
+    def _retry(self, fn: Any, attempts: int = 4) -> Any:
+        # Free-tier databases sleep and need a few seconds to wake; a short backoff covers that.
+        last: Exception | None = None
+        for i in range(attempts):
+            try:
+                self._ensure()
+                return fn()
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                self._ready = False
+                if i + 1 < attempts:
+                    time.sleep(min(2.0 * (i + 1), 6.0))
+        raise RuntimeError(f"settings database unavailable: {type(last).__name__}") from last
+
+    def load(self) -> str | None:
+        from sqlalchemy import select
+
+        def _do() -> str | None:
+            with self.engine.connect() as conn:
+                return conn.execute(select(self._table.c.value).where(self._table.c.key == self.KEY)).scalar_one_or_none()
+
+        return self._retry(_do)
+
+    def save(self, payload: str) -> None:
+        from datetime import datetime, timezone
+
+        from sqlalchemy import insert, update
+
+        def _do() -> None:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            with self.engine.begin() as conn:
+                res = conn.execute(
+                    update(self._table).where(self._table.c.key == self.KEY).values(value=payload, updated_at=now)
+                )
+                if res.rowcount == 0:
+                    conn.execute(insert(self._table).values(key=self.KEY, value=payload, updated_at=now))
+
+        self._retry(_do, attempts=3)
+
+    def dispose(self) -> None:
+        self.engine.dispose()
+
+
+class ConfigStore:
+    """Thread-safe, atomic persistence for RuntimeConfig.
+
+    runtime.json is always written (the supervisor and heartbeat worker read it). When a settings
+    database URL is configured, that database is the source of truth: every update is committed there
+    BEFORE it is applied, so a save the dashboard reports as "Saved" survives a restart even on a host
+    with no persistent disk. If the database write fails the update is rejected and nothing changes.
+    """
+
+    def __init__(self, path: Path, database_url: str | None = None) -> None:
         self.path = Path(path)
         self._lock = threading.RLock()
-        self._config = self._load()
+        self._db = SettingsDatabase(database_url) if database_url else None
         self._revision = 0
+        self._config = self._load()
+
+    @classmethod
+    def from_settings(cls, settings: "Settings") -> "ConfigStore":
+        url = settings.settings_database_url.get_secret_value() if settings.settings_database_url else None
+        return cls(settings.runtime_config_file, database_url=url or None)
+
+    @property
+    def storage(self) -> dict[str, Any]:
+        """Where saves go, for the dashboard: durable = survives a restart/redeploy."""
+        return {"backend": "database" if self._db is not None else "file", "durable": self._db is not None}
 
     def _load(self) -> RuntimeConfig:
+        if self._db is not None:
+            stored = self._db.load()
+            if stored is not None:
+                try:
+                    cfg = RuntimeConfig.model_validate(json.loads(stored))
+                except Exception as exc:
+                    raise RuntimeError(f"invalid runtime config in settings database: {exc}") from exc
+                self._write_file(cfg)  # keep the local mirror (supervisor/heartbeat read it) in sync
+                log.info("runtime settings loaded from database")
+                return cfg
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
-                return RuntimeConfig.model_validate(raw)
+                cfg = RuntimeConfig.model_validate(raw)
             except Exception as exc:
                 raise RuntimeError(f"invalid runtime config at {self.path}: {exc}") from exc
+            if self._db is not None:
+                self._db.save(self._payload(cfg))  # first run with a database: adopt the existing file
+            return cfg
         cfg = RuntimeConfig()
         self._write(cfg)
         return cfg
 
-    def _write(self, cfg: RuntimeConfig) -> None:
+    @staticmethod
+    def _payload(cfg: RuntimeConfig) -> str:
+        return json.dumps(cfg.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+
+    def _write_file(self, cfg: RuntimeConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(cfg.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+        payload = self._payload(cfg)
         fd, tmp = tempfile.mkstemp(prefix=".runtime-", suffix=".json", dir=str(self.path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -525,6 +665,12 @@ class ConfigStore:
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+
+    def _write(self, cfg: RuntimeConfig) -> None:
+        # Database first: if it fails, the exception propagates and neither copy changes.
+        if self._db is not None:
+            self._db.save(self._payload(cfg))
+        self._write_file(cfg)
 
     def snapshot(self) -> RuntimeConfig:
         with self._lock:
@@ -548,6 +694,10 @@ class ConfigStore:
 
     def set_capital(self, capital: Decimal | None) -> tuple[RuntimeConfig, RuntimeConfig]:
         return self.update({"capital_usd": capital})
+
+    def close(self) -> None:
+        if self._db is not None:
+            self._db.dispose()
 
 
 def load_settings() -> Settings:
