@@ -1667,6 +1667,22 @@ class BotEngine:
         self.state.increment("decisions")
 
     # ------------------------------------------------------------------ publish
+    def _position_payload(self, position) -> dict:
+        book = self._books.get(position.asset_id)
+        mark = book.best_bid if book else None
+        return {
+            "market_id": position.market_id,
+            "outcome": position.outcome,
+            "shares": _dec(position.shares),
+            "avg_price": _dec(position.avg_price),
+            "cost_basis": _dec(position.cost_basis),
+            "status": position.status,
+            "mark": _dec(mark),
+            "roi": _dec((mark * position.shares - position.cost_basis) / position.cost_basis) if mark and position.cost_basis else None,
+            "unrealized_pnl": _dec(mark * position.shares - position.cost_basis) if mark is not None else None,
+            "value_now": _dec(mark * position.shares) if mark is not None else None,
+        }
+
     async def _publish(self, now: datetime) -> None:
         cfg = self._config()
         mode_value = self._effective_mode.value
@@ -1706,23 +1722,15 @@ class BotEngine:
                 "rules_approved": bool(rule and rule.approved),
                 "accepting_orders": market.accepting_orders,
             }
-        position = self.ledger.active_position(mode_value)
-        position_payload = None
-        if position is not None:
-            book = self._books.get(position.asset_id)
-            mark = book.best_bid if book else None
-            position_payload = {
-                "market_id": position.market_id,
-                "outcome": position.outcome,
-                "shares": _dec(position.shares),
-                "avg_price": _dec(position.avg_price),
-                "cost_basis": _dec(position.cost_basis),
-                "status": position.status,
-                "mark": _dec(mark),
-                "roi": _dec((mark * position.shares - position.cost_basis) / position.cost_basis) if mark and position.cost_basis else None,
-                "unrealized_pnl": _dec(mark * position.shares - position.cost_basis) if mark is not None else None,
-                "value_now": _dec(mark * position.shares) if mark is not None else None,
-            }
+        # Up to two positions can be open at once. `positions` lists all of them; `position` is
+        # the one in the market on screen (else the oldest) for anything that expects a single one.
+        open_positions = self.ledger.open_positions(mode_value)
+        positions_payload = [self._position_payload(pos) for pos in sorted(open_positions, key=lambda row: row.id)]
+        current_id = machine.market.market_id if machine is not None else None
+        position_payload = next(
+            (item for item in positions_payload if item["market_id"] == current_id),
+            positions_payload[0] if positions_payload else None,
+        )
         feeds = self._feeds_payload(now, self._composite)
         books = {}
         for outcome in (Outcome.UP, Outcome.DOWN):
@@ -1765,6 +1773,7 @@ class BotEngine:
             probability=self._probability_dict(),
             regime={"regime": self._regime.regime.value, "confidence": self._regime.confidence, "reasons": self._regime.reasons} if self._regime else None,
             position=position_payload,
+            positions=positions_payload,
             risk=self._risk_dict(risk_status),
             last_decision=self._last_decision,
             latency=latency,

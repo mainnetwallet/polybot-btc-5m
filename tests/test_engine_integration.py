@@ -746,3 +746,36 @@ def test_engine_without_an_oracle_builds_its_own_twap_tracker(settings, repo, ad
     )
     assert isinstance(engine.tracker, TwapTracker)
     assert engine.tracker.window_seconds == 60
+
+
+def test_dashboard_snapshot_lists_every_open_position(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())  # discovers the market and reads its books
+    repo.create_position(
+        market_id="mkt-earlier", condition_id="cond-mkt-earlier", asset_id=market.asset_id(Outcome.DOWN),
+        outcome="DOWN", shares=Decimal("8"), avg_price=Decimal("0.40"), entry_fee=Decimal(0), mode="PAPER",
+    )
+    repo.create_position(
+        market_id=market.market_id, condition_id=market.condition_id, asset_id=market.asset_id(Outcome.UP),
+        outcome="UP", shares=Decimal("5"), avg_price=Decimal("0.50"), entry_fee=Decimal(0), mode="PAPER",
+    )
+
+    asyncio.run(engine._publish(START))
+
+    snap = engine.state.snapshot()
+    assert [p["market_id"] for p in snap["positions"]] == ["mkt-earlier", market.market_id]
+    assert [p["outcome"] for p in snap["positions"]] == ["DOWN", "UP"]
+    assert Decimal(snap["positions"][0]["value_now"]) == Decimal("8") * Decimal("0.48")
+    # `position` stays the one in the market on screen, for anything that expects a single position.
+    assert snap["position"]["market_id"] == market.market_id
+
+
+def test_dashboard_snapshot_with_no_position_is_empty(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)
+
+    asyncio.run(engine._iteration())
+
+    snap = engine.state.snapshot()
+    assert snap["positions"] == [] and snap["position"] is None
