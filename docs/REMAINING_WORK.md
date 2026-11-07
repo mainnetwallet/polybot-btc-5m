@@ -29,41 +29,35 @@ weaken the LIVE gate. Run `python -m pytest -q` before every commit; the suite m
   and TWAP projection no longer filters on `is_chainlink`.
 - Removed settings are listed in `RuntimeConfig.LEGACY_KEYS`, so old `runtime.json` files still load.
 
-### Open tasks (in priority order)
+### Done in the follow-up commits of this PR
 
-1. **Daily loss limit vs trade size.** Default `daily_loss_limit_usd` is 1; with `trade_size_usd` >= 1
-   a single full loss locks the day. Add a plain-words warning to the Settings advice
-   (`api/app.py::_advice`, `sizing.py::trade_size_advice`) when the limit is below about 2-3x the trade
-   size, and consider showing the worst-case exposure `trade_size_usd * max_entries_per_market *
-   max_active_positions`. Do not silently change the user's values.
-2. **Multi-position blind spots.**
-   - `recovery.py` and `cli.py status` (`repo.open_position()` returns one row) were not reviewed for 2
-     positions. Make startup recovery reconcile every open position and make `status` list all of them.
-   - The dashboard "open position" card (`engine._publish`, `ledger.active_position`) shows only the first
-     position. Publish a list and render all open positions in `web/app.js`.
-3. **LIVE top-up path.** The top-up was tested with the fake adapter and the paper broker only. Review
-   `exchange/sdk_adapter.py` and `recovery.py` for entries that add to an existing position, and add tests.
-4. **Engine-level tests for the new entry gating.** Cover: top-up refused when not in profit, refused on the
-   opposite side, refused after an exit, allowed when in profit; 2nd position allowed in a new market while
-   the previous market's position is still open; 3rd position refused.
-5. **Exit rules review (needs PAPER data, do not change on a hunch).** In `exits.py` the precedence is
+- **Loss limit vs trade size:** Settings advice warns when `daily_loss_limit_usd` is at most one trade or
+  under 2x the trade size, and reports the worst-case exposure. It only warns; values are never changed.
+- **Multi-position:** `repo.open_positions()` replaces the single-row `open_position()`, `status` lists every
+  open position, and the dashboard publishes and renders all of them (`positions`).
+- **Recovery of a LIVE top-up:** a top-up fill is merged into the open position (or recognised as already
+  merged) instead of blocking startup or being dropped. Sizes that cannot be explained still block.
+- **Entry gating tests:** `tests/test_entry_gating.py`.
+- **Docs:** SPEC, PHASE0_REPORT and VALIDATION_REPORT carry a "historical" banner listing what changed.
+- **Repo hygiene:** `polybot.egg-info/` is untracked and ignored.
+
+### Still open (in priority order)
+
+1. **Review `exchange/sdk_adapter.py::place_order` for top-ups.** Confirm the fill size and average price
+   come from the order's own fills, never from the exchange's total position, which includes earlier
+   entries. Not reviewed yet. Do this before any LIVE activation.
+2. **Exit rules review (needs PAPER data, do not change on a hunch).** In `exits.py` the precedence is
    emergency -> stop loss (-25%) -> trailing stop (SHADOW by default) -> take profit (+20%, dynamic) ->
    probability reversal -> momentum reversal -> liquidity deterioration -> hold-vs-sell EV -> time exit
-   (30 s before end) -> hold to resolution. Ask for / analyse recorded PAPER trades, then decide whether
-   to drop a fixed stop loss, merge the overlapping reversal / EV rules, and turn trailing stop ON or
-   delete it.
-6. **Edge and strategy gates (needs PAPER data).** `min_net_edge` 0.05 is large for a market this
+   (30 s before end) -> hold to resolution. Analyse recorded PAPER trades, then decide whether to drop a
+   fixed stop loss, merge the overlapping reversal / EV rules, and turn trailing stop ON or delete it.
+3. **Edge and strategy gates (needs PAPER data).** `min_net_edge` 0.05 is large for a market this
    efficient, and the active strategy (`momentum`) must agree with the probability model's side. Measure
    how many good trades that agreement filters out before keeping or removing it. Remove strategies that
    stay unused (`reversal`, `breakout`, `trend_confirmation`) only if the owner agrees.
-7. **Outcome simulator.** `oracle/simulator.py` still refuses unknown / non-Chainlink rules when
-   recording actual outcomes, so analytics skip those markets. Decide whether to record them with a
+4. **Outcome simulator (owner decision).** `oracle/simulator.py` still refuses unknown / non-Chainlink rules
+   when recording actual outcomes, so analytics skip those markets. Decide whether to record them with a
    lower confidence flag instead.
-8. **Docs.** `docs/SPEC.md`, `docs/PHASE0_REPORT.md` and `docs/VALIDATION_REPORT.md` still describe the
-   120 s window, one position, one entry, the 2-loss cooldown and rule approval. Mark them as historical
-   or update them.
-9. **Repo hygiene.** `polybot.egg-info/` is tracked in git and changes on every `pip install -e .`.
-   Remove it from the index and add it to `.gitignore`.
 
 ### Safety notes to keep in mind
 

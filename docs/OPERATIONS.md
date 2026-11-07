@@ -81,8 +81,8 @@ Key fields:
 - `mode` — requested mode from `runtime.json`
 - `live_activation` — whether a persisted LIVE activation exists
 - `recovery.state` — `READY` or `BLOCKED`; a blocked recovery prevents entries
-- `risk.kill_switch`, `risk.cooldown_until`, `risk.consecutive_losses`
-- `open_position`, `open_orders`, `paper_trades`, `live_trades`
+- `risk.kill_switch`, `risk.kill_reason`, `risk.consecutive_losses` (a statistic only; there is no cooldown)
+- `open_positions` (a list; up to two, each with market, side, shares, average price, cost and mode), `open_orders`, `paper_trades`, `live_trades`
 - `heartbeat.armed`, `heartbeat.consecutive_failures`
 
 Decision reason codes explain every NO TRADE. This table lists every `ReasonCode` (a test fails
