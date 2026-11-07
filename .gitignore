@@ -14,3 +14,4 @@ config/live.flag
 *.db-shm
 *.parquet
 .DS_Store
+*.egg-info/
