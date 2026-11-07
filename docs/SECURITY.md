@@ -74,12 +74,13 @@ before signing anything.
 ## Trading safety
 
 - Every order is a fixed `trade_size_usd` amount; the planned loss is computed as a full loss even when a stop is planned.
-- Daily loss limit (fixed USDC amount), profit lock option, two-loss cooldown, one position, one entry per
-  market, hard 120-second entry window.
+- Daily loss limit (fixed USDC amount), profit lock option, at most two open positions, at most three entries
+  per market (a 2nd/3rd entry only while the position is in profit), fixed 150-second entry window. There is
+  no loss-streak cooldown.
 - Position size is never increased to satisfy exchange minimums; the order is skipped.
-- Chainlink only for resolution. Pyth/spot text is rejected as a substitute. Unknown
-  methodology, unknown source, unknown tie rule, or low rule confidence means NO TRADE.
-- Rule fingerprints must be approved by the operator when `require_rules_approval` is true.
+- Resolution rules are recorded and approved automatically. Unknown methodology, unknown source, unknown tie
+  rule, low rule confidence or a non-Chainlink source no longer blocks a trade; the operator accepts that
+  basis risk. The LIVE gate still has all 24 conditions, and the rule conditions now always pass.
 - Write-ahead order journal; `UNKNOWN` exchange outcomes are never blindly retried.
 - Exits sell every share held as a market (FAK) SELL with no minimum share size; a position is only held to resolution if the book has no bids.
 - Startup recovery uses the exchange as the source of truth and blocks on ambiguity.

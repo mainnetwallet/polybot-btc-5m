@@ -133,12 +133,29 @@ def size_position(
     )
 
 
+# The daily loss limit should leave room for more than one losing trade. Below this many trade sizes a
+# single market (an entry plus a top-up) can use up the whole day.
+LOSS_LIMIT_MIN_TRADE_MULTIPLE = Decimal(2)
+
+
+def _usd(value: Decimal) -> str:
+    return f"${value.normalize():f}" if value == value.to_integral_value() else f"${value:.2f}"
+
+
 def trade_size_advice(
     *,
     trade_size_usd: Decimal | None,
     min_notional_usd: Decimal = DEFAULT_MIN_NOTIONAL_USD,
-) -> dict[str, str | bool | None]:
-    """Plain-language check that the trade size can ever produce an order."""
+    daily_loss_limit_usd: Decimal | None = None,
+    max_entries_per_market: int = 1,
+    max_active_positions: int = 1,
+) -> dict[str, str | bool | list[str] | None]:
+    """Plain-language checks on the trade size and on how it fits the daily loss limit.
+
+    ``ok``/``message`` only say whether the trade size can ever produce an order. Everything about the
+    daily loss limit is a ``warnings`` entry: it never changes ``ok`` and the person's values are
+    never changed for them.
+    """
     message: str | None = None
     if trade_size_usd is None:
         message = f"Trade size is not set, so no orders will be placed. Enter a USDC amount of ${min_notional_usd:f} or more."
@@ -147,4 +164,35 @@ def trade_size_advice(
             f"Trade size ${trade_size_usd:f} is below the ${min_notional_usd:f} minimum order, "
             f"so every order will be refused. Use ${min_notional_usd:f} or more."
         )
-    return {"ok": message is None, "message": message, "min_order_usd": f"{min_notional_usd:.2f}"}
+
+    warnings: list[str] = []
+    exposure: Decimal | None = None
+    if trade_size_usd is not None and trade_size_usd > 0:
+        entries = max(1, int(max_entries_per_market))
+        positions = max(1, int(max_active_positions))
+        exposure = trade_size_usd * entries * positions
+        if daily_loss_limit_usd is not None and daily_loss_limit_usd > 0:
+            size, limit = trade_size_usd, daily_loss_limit_usd
+            if limit <= size:
+                warnings.append(
+                    f"The daily loss limit ({_usd(limit)}) is not more than one trade ({_usd(size)}). "
+                    f"One full loss reaches it and the bot stops for the rest of the day. "
+                    f"Raise the limit to at least {_usd(size * LOSS_LIMIT_MIN_TRADE_MULTIPLE)} "
+                    f"({LOSS_LIMIT_MIN_TRADE_MULTIPLE}x the trade size) or lower the trade size. "
+                    f"Worst case if every open entry loses: {_usd(exposure)} "
+                    f"({_usd(size)} x {entries} entries x {positions} positions)."
+                )
+            elif limit < size * LOSS_LIMIT_MIN_TRADE_MULTIPLE:
+                warnings.append(
+                    f"The daily loss limit ({_usd(limit)}) is less than {LOSS_LIMIT_MIN_TRADE_MULTIPLE} trades "
+                    f"of {_usd(size)}. Two losses, or one loss after a top-up, reach it and stop the bot for the day. "
+                    f"Worst case if every open entry loses: {_usd(exposure)} "
+                    f"({_usd(size)} x {entries} entries x {positions} positions)."
+                )
+    return {
+        "ok": message is None,
+        "message": message,
+        "min_order_usd": f"{min_notional_usd:.2f}",
+        "warnings": warnings,
+        "worst_case_exposure_usd": None if exposure is None else f"{exposure:.2f}",
+    }

@@ -105,7 +105,7 @@ class TwapTracker:
         now: datetime,
         *,
         max_age_ms: int = 5000,
-        require_chainlink: bool = True,
+        require_chainlink: bool = False,
     ) -> FeedStatus:
         now = as_utc(now)
         latest = self.latest(now)
@@ -181,7 +181,7 @@ class TwapTracker:
         area = 0.0
         if now > window_start:
             known_seconds = (now - window_start).total_seconds()
-            items = [o for o in self.observations_between(window_start, now) if o.is_chainlink]
+            items = list(self.observations_between(window_start, now))
             future_span = min(window, (end - now).total_seconds())
             drift_from = known_seconds
             if not items:

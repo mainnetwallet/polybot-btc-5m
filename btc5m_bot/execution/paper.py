@@ -174,20 +174,29 @@ class PaperBroker:
             if cost > self.cash:
                 return OrderResult(intent.client_order_id, OrderStatus.REJECTED, error_code="INSUFFICIENT_BALANCE", error_message="paper cash insufficient")
             existing = self.position_for(intent.market_id)
-            if existing is not None:
-                return OrderResult(intent.client_order_id, OrderStatus.REJECTED, error_code="DUPLICATE_ENTRY", error_message="position already open")
+            if existing is not None and existing.asset_id != intent.asset_id:
+                # A top-up must be on the same outcome; never hold UP and DOWN of one market.
+                return OrderResult(intent.client_order_id, OrderStatus.REJECTED, error_code="DUPLICATE_ENTRY", error_message="position on the other outcome is open")
             self.cash -= cost
-            self.positions[intent.asset_id] = PaperPosition(
-                market_id=intent.market_id,
-                condition_id=intent.condition_id,
-                asset_id=intent.asset_id,
-                outcome=intent.outcome,
-                shares=filled,
-                avg_price=avg,
-                entry_fee=fee,
-                cost_basis=cost,
-                opened_at=self.clock.now(),
-            )
+            if existing is not None:
+                # Top-up of the position already held in this market.
+                total_shares = existing.shares + filled
+                existing.avg_price = (existing.shares * existing.avg_price + filled * avg) / total_shares
+                existing.shares = total_shares
+                existing.entry_fee += fee
+                existing.cost_basis += cost
+            else:
+                self.positions[intent.asset_id] = PaperPosition(
+                    market_id=intent.market_id,
+                    condition_id=intent.condition_id,
+                    asset_id=intent.asset_id,
+                    outcome=intent.outcome,
+                    shares=filled,
+                    avg_price=avg,
+                    entry_fee=fee,
+                    cost_basis=cost,
+                    opened_at=self.clock.now(),
+                )
             status = OrderStatus.PARTIAL if short else OrderStatus.FILLED
             result = OrderResult(
                 client_order_id=intent.client_order_id,

@@ -234,9 +234,11 @@ def test_config_is_allowlisted_and_hard_limits_rejected(client):
     headers = login(test_client)
     bad = test_client.post("/api/config", json={"patch": {"mode": "LIVE"}}, headers=headers)
     assert bad.status_code == 400
-    hard = test_client.post("/api/config", json={"patch": {"max_consecutive_losses": 5}}, headers=headers)
+    hard = test_client.post("/api/config", json={"patch": {"max_active_positions": 3}}, headers=headers)
     assert hard.status_code == 400
-    assert "immutable cap" in hard.json()["detail"]
+    assert "between 1 and 2" in hard.json()["detail"]
+    removed = test_client.post("/api/config", json={"patch": {"max_consecutive_losses": 5}}, headers=headers)
+    assert removed.status_code == 400  # the loss-streak cooldown no longer exists
     before = store.revision
     good = test_client.post("/api/config", json={"patch": {"min_probability": "0.65"}}, headers=headers)
     assert good.status_code == 200
@@ -367,12 +369,12 @@ def test_activity_clear_deletes_on_click_without_typed_phrase(client, repo):
 def test_config_api_returns_400_for_out_of_range_tunables(client):
     test_client, _, store = client
     headers = login(test_client)
-    before = store.snapshot().cooldown_minutes
-    for patch in ({"cooldown_minutes": 0}, {"trailing_stop_pct": "1.5"}, {"min_oracle_coverage_seconds": 0}):
+    before = store.snapshot().trailing_stop_pct
+    for patch in ({"min_depth_multiple": 0}, {"trailing_stop_pct": "1.5"}, {"min_oracle_coverage_seconds": 0}):
         response = test_client.post("/api/config", json={"patch": patch}, headers=headers)
         assert response.status_code == 400, patch
         assert "invalid configuration" in response.json()["detail"]
-    assert store.snapshot().cooldown_minutes == before
+    assert store.snapshot().trailing_stop_pct == before
 
 
 # ---------------------------------------------------------------- strict JSON

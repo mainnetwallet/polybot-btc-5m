@@ -124,21 +124,21 @@ def test_daily_loss_limit_is_a_fixed_usdc_amount(clock, repo):
         market_id="d", mode=Mode.PAPER, planned_loss=Decimal("0.2"),
         planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
-    assert not allowed and reason in {ReasonCode.DAILY_LOSS_LIMIT, ReasonCode.COOLDOWN}
+    assert not allowed and reason is ReasonCode.DAILY_LOSS_LIMIT
 
 
-def test_two_consecutive_losses_start_cooldown(clock, repo):
-    risk = manager(clock, repo)
-    first = risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
-    assert first.consecutive_losses == 1 and first.cooldown_until is None
-    second = risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
-    assert second.consecutive_losses == 2
-    assert second.cooldown_until == START + timedelta(minutes=15)
+def test_consecutive_losses_never_start_a_cooldown(clock, repo):
+    # The loss-streak cooldown was removed: only the daily loss limit stops trading after losses.
+    risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("500")))
+    for market_id in ("a", "b", "c"):
+        update = risk.record_result(realized_pnl=Decimal("-1"), market_id=market_id, mode=Mode.PAPER)
+        assert update.cooldown_until is None
+    assert update.consecutive_losses == 3  # still counted as a statistic
     allowed, reason, _ = risk.pre_trade_check(
-        market_id="c", mode=Mode.PAPER, planned_loss=Decimal("1"),
+        market_id="d", mode=Mode.PAPER, planned_loss=Decimal("1"),
         planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
-    assert not allowed and reason is ReasonCode.COOLDOWN
+    assert allowed and reason is ReasonCode.OK
 
 
 def test_win_resets_consecutive_losses(clock, repo):
@@ -149,19 +149,51 @@ def test_win_resets_consecutive_losses(clock, repo):
     assert update.cooldown_until is None
 
 
-def test_only_one_active_position_and_one_entry_per_market(clock, repo):
-    risk = manager(clock, repo)
+def _open_position(repo, market_id, outcome=Outcome.UP):
     market = make_market()
     repo.create_position(
-        market_id=market.market_id, condition_id=market.condition_id,
-        asset_id=market.asset_id(Outcome.UP), outcome=Outcome.UP.value,
+        market_id=market_id, condition_id=market.condition_id,
+        asset_id=market.asset_id(outcome), outcome=outcome.value,
         shares=Decimal("10"), avg_price=Decimal("0.5"), entry_fee=Decimal(0), mode="PAPER",
     )
-    allowed, reason, _ = risk.pre_trade_check(
-        market_id="mkt-other", mode=Mode.PAPER, planned_loss=Decimal("1"),
+
+
+def _check(risk, market_id):
+    return risk.pre_trade_check(
+        market_id=market_id, mode=Mode.PAPER, planned_loss=Decimal("1"),
         planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
     )
+
+
+def test_two_positions_may_be_open_but_not_three(clock, repo):
+    risk = manager(clock, repo)
+    _open_position(repo, "mkt-1")
+    allowed, reason, _ = _check(risk, "mkt-2")
+    assert allowed and reason is ReasonCode.OK  # a 2nd position in another market is fine
+    _open_position(repo, "mkt-2")
+    allowed, reason, _ = _check(risk, "mkt-3")
     assert not allowed and reason is ReasonCode.ACTIVE_POSITION
+
+
+def test_topping_up_a_held_market_is_not_a_new_position(clock, repo):
+    risk = manager(clock, repo)
+    _open_position(repo, "mkt-1")
+    _open_position(repo, "mkt-2")
+    # both slots are used, but an entry into a market that already has a position is a top-up
+    allowed, reason, _ = _check(risk, "mkt-2")
+    assert allowed and reason is ReasonCode.OK
+
+
+def test_max_entries_per_market_is_three(clock, repo):
+    risk = manager(clock, repo)
+    market = make_market()
+    for shares in ("6", "7"):
+        intent_for(repo, market, shares=shares, status=OrderStatus.FILLED)
+    allowed, _, _ = _check(risk, market.market_id)
+    assert allowed  # a 3rd entry is still allowed
+    intent_for(repo, market, shares="8", status=OrderStatus.FILLED)
+    allowed, reason, _ = _check(risk, market.market_id)
+    assert not allowed and reason is ReasonCode.ENTRY_ALREADY_USED
 
 
 def test_entry_allowance_is_consumed_only_after_submission(clock, repo):
@@ -455,42 +487,21 @@ def test_dynamic_take_profit_locks_a_weak_edge_earlier():
 
 
 # --------------------------------------------------------------------------- audit regressions
-def test_status_does_not_deadlock_after_cooldown_expires(clock, repo):
-    """The engine gates entries on risk.status().allowed, so status() itself must see an
-    expired cooldown as served. Otherwise the bot sticks on CONSECUTIVE_LOSS_LIMIT forever."""
-    risk = manager(clock, repo)
+def test_status_stays_allowed_after_losses_without_a_daily_lock(clock, repo):
+    """With the loss-streak cooldown gone, status() only blocks on the real protections."""
+    risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("500")))
     risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
     risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
-    during = risk.status(Mode.PAPER, balance=BALANCE)
-    assert not during.allowed and during.reason is ReasonCode.COOLDOWN
-
-    clock.advance(15 * 60 + 1)
-    after = risk.status(Mode.PAPER, balance=BALANCE)
-    assert after.allowed, (after.reason, after.detail)
-    assert after.consecutive_losses == 0 and after.cooldown_until is None
-    # and the entry-time check agrees with the gate
-    ok, reason, _ = risk.pre_trade_check(
-        market_id="c", mode=Mode.PAPER, planned_loss=Decimal("1"),
-        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
-    )
-    assert ok and reason is ReasonCode.OK
-
-
-def test_status_still_blocks_while_cooldown_is_running(clock, repo):
-    risk = manager(clock, repo)
-    risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
-    risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
-    clock.advance(14 * 60)
     st = risk.status(Mode.PAPER, balance=BALANCE)
-    assert not st.allowed and st.reason is ReasonCode.COOLDOWN
-    assert st.consecutive_losses == 2
+    assert st.allowed, (st.reason, st.detail)
+    assert st.consecutive_losses == 2 and st.cooldown_until is None
 
 
-def test_cooldown_expiry_does_not_clear_a_daily_lock(clock, repo):
+def test_losses_that_reach_the_daily_limit_lock_the_day(clock, repo):
     risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("1.5")))
     risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
     risk.record_result(realized_pnl=Decimal("-1"), market_id="b", mode=Mode.PAPER)
-    clock.advance(15 * 60 + 1)
+    clock.advance(15 * 60 + 1)  # time passing never lifts a daily lock
     st = risk.status(Mode.PAPER, balance=BALANCE)
     assert not st.allowed and st.reason is ReasonCode.DAILY_LOSS_LIMIT
 
@@ -573,9 +584,8 @@ def test_partial_exit_fill_moves_daily_pnl_but_not_the_loss_streak(clock, repo):
     assert (day.trades, day.wins, day.losses) == (1, 0, 1)
 
 
-def test_one_losing_position_in_two_fills_does_not_start_the_cooldown(clock, repo):
-    # max_consecutive_losses is 2: a single position that happened to close in two fills used to
-    # count as two losses and put the bot into its 15 minute cooldown.
+def test_one_losing_position_in_two_fills_counts_as_one_loss(clock, repo):
+    # A single position that happened to close in two fills must count as one loss, not two.
     risk = manager(clock, repo)
     risk.record_result(realized_pnl=Decimal("-0.30"), market_id="a", mode=Mode.PAPER, position_closed=False)
     final = risk.record_result(

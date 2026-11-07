@@ -110,7 +110,7 @@ def test_exit_feasibility_has_no_share_minimum():
     assert assess_exit_feasibility(None, Decimal("10")).allowed is False
 
 
-def test_paper_broker_entry_fill_fees_and_duplicate_guard(clock, repo):
+def test_paper_broker_entry_fill_fees_topup_and_opposite_side_guard(clock, repo):
     broker = PaperBroker(
         Decimal("1000"), clock, miss_probability=0.0, partial_probability=0.0,
         maker_fill_probability=0.0, seed=1,
@@ -127,11 +127,26 @@ def test_paper_broker_entry_fill_fees_and_duplicate_guard(clock, repo):
     assert result.filled_shares == Decimal("10")
     assert broker.cash < Decimal("1000")
     assert broker.position_for(market.market_id) is not None
-    duplicate = journal.new_intent(
+    cash_after_first = broker.cash
+    # A second entry on the same outcome tops the position up instead of opening another one.
+    topup = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"),
         limit_price=Decimal("0.51"), order_type="FOK", mode="PAPER", usdc_amount=Decimal("5"),
     )
-    rejected = asyncio.run(broker.place_order(duplicate, market, book))
+    filled = asyncio.run(broker.place_order(topup, market, book))
+    assert filled.status is OrderStatus.FILLED
+    position = broker.position_for(market.market_id)
+    assert position.shares == Decimal("20")
+    assert position.avg_price == Decimal("0.50")
+    assert broker.cash < cash_after_first
+    assert len(broker.positions) == 1
+    # ...but never the other outcome of the same market.
+    down_book = make_book(market.asset_id(Outcome.DOWN), ask="0.50", ask_size="1000")
+    other = journal.new_intent(
+        market=market, outcome=Outcome.DOWN, side=Side.BUY, shares=Decimal("10"),
+        limit_price=Decimal("0.51"), order_type="FOK", mode="PAPER", usdc_amount=Decimal("5"),
+    )
+    rejected = asyncio.run(broker.place_order(other, market, down_book))
     assert rejected.status is OrderStatus.REJECTED
     assert rejected.error_code == "DUPLICATE_ENTRY"
 
@@ -240,6 +255,36 @@ def test_execution_journal_prevents_duplicate_entries(clock, repo, adapter):
     duplicate = asyncio.run(engine.execute_entry(second, market, book))
     assert duplicate.result.status is OrderStatus.REJECTED
     assert duplicate.result.error_code == "DUPLICATE_ORDER"
+
+
+def test_second_entry_in_a_market_tops_up_one_position(clock, repo, adapter):
+    journal = OrderJournal(repo)
+    engine = ExecutionEngine(
+        repo=repo, journal=journal, adapter=adapter, paper=None, clock=clock,
+        mode_provider=lambda: Mode.LIVE,
+    )
+    market = make_market()
+    book = make_book(market.asset_id(Outcome.UP))
+    adapter.set_book(market.asset_id(Outcome.UP), bids=[("0.49", "1000")], asks=[("0.50", "1000")])
+    results = []
+    for shares, usdc in (("10", "5"), ("20", "10")):  # different sizes -> different idempotency keys
+        intent = journal.new_intent(
+            market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal(shares),
+            limit_price=Decimal("0.51"), mode="LIVE", usdc_amount=Decimal(usdc),
+        )
+        outcome = asyncio.run(engine.execute_entry(intent, market, book))
+        assert outcome.result.status is OrderStatus.FILLED
+        results.append(outcome.result)
+    position = repo.get_position(market.market_id, "LIVE")
+    total_shares = sum(r.filled_shares for r in results)
+    total_cost = sum(r.filled_shares * r.avg_price + r.fee_usd for r in results)
+    assert position.status == "OPEN"
+    assert position.shares == total_shares
+    assert position.cost_basis == total_cost
+    assert position.entry_fee == sum(r.fee_usd for r in results)
+    expected_avg = sum(r.filled_shares * r.avg_price for r in results) / total_shares
+    assert position.avg_price == expected_avg
+    assert len([p for p in repo.list_positions(mode="LIVE") if p.market_id == market.market_id]) == 1
 
 
 def test_unknown_order_requires_recovery(clock, repo, adapter):

@@ -8,6 +8,10 @@ from enum import Enum
 from typing import Any, Iterable
 
 
+# New entries are allowed only in the first ENTRY_WINDOW_SECONDS of a market.
+ENTRY_WINDOW_SECONDS = 150
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -321,7 +325,7 @@ class MarketInfo:
     def entry_deadline(self) -> datetime:
         from datetime import timedelta
 
-        return self.event_start + timedelta(seconds=120)
+        return self.event_start + timedelta(seconds=ENTRY_WINDOW_SECONDS)
 
     def outcome_index(self, outcome: Outcome) -> int:
         label = outcome.gamma_label.lower()

@@ -4,6 +4,15 @@
 - Status: FINAL (awaiting approval) — all official-documentation verification completed 2026-11-05
 - Master spec: `docs/SPEC.md`
 
+> **Historical document (updated Nov 2026).** This is the Phase 0 audit and plan, written before the changes below. It is kept as a record and is not edited line by line. What changed since:
+>
+> - **Entry window:** 150 seconds (was 120).
+> - **Positions and entries:** up to **2** open positions and up to **3** entries per market (was 1 and 1). A 2nd or 3rd entry is a top-up of the same side, allowed only while the position is in profit and never after an exit in that market.
+> - **No loss-streak cooldown:** `max_consecutive_losses` and `cooldown_minutes` were removed. The streak is only a statistic; the daily loss limit is the loss guard.
+> - **No rule approval gate:** resolution rules are approved automatically, and an unknown or non-Chainlink rule no longer blocks a trade. This adds basis risk: the market may resolve on a different source than the Chainlink TWAP the model uses.
+>
+> Where this document disagrees with the list above, the list and the code are right. Current behaviour is in `README.md` and `docs/OPERATIONS.md`.
+
 ---
 
 ## 1. Repository / Workspace Audit

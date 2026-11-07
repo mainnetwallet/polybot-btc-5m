@@ -84,7 +84,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         state_path = settings.data_path / "supervisor.json"
         supervisor = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
         risk = repo.get_risk_state()
-        position = repo.open_position("LIVE") or repo.open_position("PAPER")
+        positions = repo.open_positions()
         payload = {
             "mode": ConfigStore.from_settings(settings).snapshot().mode.value,
             "live_activation": repo.active_live_activation() is not None,
@@ -94,17 +94,19 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "kill_switch": risk.kill_switch,
                 "kill_reason": risk.kill_reason,
                 "consecutive_losses": risk.consecutive_losses,
-                "cooldown_until": risk.cooldown_until.isoformat() if risk.cooldown_until else None,
             },
-            "open_position": {
-                "market_id": position.market_id,
-                "outcome": position.outcome,
-                "shares": str(position.shares),
-                "status": position.status,
-                "mode": position.mode,
-            }
-            if position
-            else None,
+            "open_positions": [
+                {
+                    "market_id": position.market_id,
+                    "outcome": position.outcome,
+                    "shares": str(position.shares),
+                    "avg_price": str(position.avg_price),
+                    "cost_basis": str(position.cost_basis),
+                    "status": position.status,
+                    "mode": position.mode,
+                }
+                for position in positions
+            ],
             "open_orders": len(repo.open_orders()),
             "paper_trades": len(repo.list_trades(mode="PAPER", limit=100_000)),
             "live_trades": len(repo.list_trades(mode="LIVE", limit=100_000)),

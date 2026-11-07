@@ -78,7 +78,9 @@ def test_tracker_health_is_fail_closed():
     tracker = TwapTracker(window_seconds=60)
     assert tracker.health(START).health.value == "UNVERIFIED"
     tracker.add(obs(START, "100", source="pyth"))
-    assert tracker.health(START).health.value == "UNVERIFIED"
+    # Trading no longer depends on the provider label; the strict Chainlink check is opt-in.
+    assert tracker.health(START).health.value == "HEALTHY"
+    assert tracker.health(START, require_chainlink=True).health.value == "UNVERIFIED"
     tracker = TwapTracker(window_seconds=60)
     tracker.add(obs(START, "100", window=30))
     assert tracker.health(START).health.value == "UNVERIFIED"

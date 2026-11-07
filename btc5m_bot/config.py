@@ -38,9 +38,8 @@ class RuntimeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
-    HARD_MAX_POSITIONS: ClassVar[int] = 1
-    HARD_MAX_ENTRIES_PER_MARKET: ClassVar[int] = 1
-    HARD_MAX_CONSECUTIVE_LOSSES: ClassVar[int] = 2
+    HARD_MAX_POSITIONS: ClassVar[int] = 2
+    HARD_MAX_ENTRIES_PER_MARKET: ClassVar[int] = 3
     HARD_MAX_ACK_LATENCY_MS: ClassVar[int] = 3000
 
     mode: Mode = Mode.PAPER
@@ -48,10 +47,10 @@ class RuntimeConfig(BaseModel):
     daily_loss_limit_usd: Decimal = Decimal("1")
     # Optional daily profit lock as a fixed USDC amount (trading locks once realized P&L >= this).
     daily_profit_lock_usd: Decimal | None = None
-    max_consecutive_losses: int = 2
-    cooldown_minutes: int = 15
-    max_active_positions: int = 1
-    max_entries_per_market: int = 1
+    # Up to 2 positions open at once (e.g. the market that is settling plus the new one) and up to
+    # 3 entries in one market. A 2nd/3rd entry is only a top-up of a position that is in profit.
+    max_active_positions: int = 2
+    max_entries_per_market: int = 3
 
     min_probability: Decimal = Decimal("0.60")
     min_net_edge: Decimal = Decimal("0.05")
@@ -71,9 +70,6 @@ class RuntimeConfig(BaseModel):
     time_exit_seconds_before_end: int = 30
 
     min_oracle_coverage_seconds: int = 60
-    # Approve every resolution rule automatically (PAPER mode only, never applied in LIVE).
-    auto_approve_rules: bool = True
-    require_rules_approval: bool = True
     live_validation_min_markets: int = 20
     paper_validation_min_trades: int = 300
 
@@ -132,6 +128,12 @@ class RuntimeConfig(BaseModel):
             "capital_from_balance",
             "risk_per_trade_pct",
             "daily_profit_lock_pct",
+            # Removed: the loss-streak cooldown (the daily loss limit is the only loss guard) and the
+            # resolution-rule approval step (the bot no longer waits for approval).
+            "max_consecutive_losses",
+            "cooldown_minutes",
+            "require_rules_approval",
+            "auto_approve_rules",
         }
     )
     LEGACY_FEATURES: ClassVar[frozenset[str]] = frozenset(
@@ -142,7 +144,7 @@ class RuntimeConfig(BaseModel):
     @classmethod
     def _drop_legacy_settings(cls, data: Any) -> Any:
         # daily_loss_limit_pct: older files stored the daily loss limit as a % of capital (now USDC).
-        # entry_window_seconds: the 120 s entry cutoff is fixed in markets/lifecycle.py.
+        # entry_window_seconds: the 150 s entry cutoff is fixed (ENTRY_WINDOW_SECONDS in types.py).
         # dynamic_tp_max_multiple: the take-profit target is never raised above take_profit_roi.
         # capital_usd / capital_from_balance / risk_per_trade_pct / daily_profit_lock_pct: Capital was
         # removed; every order is sized by trade_size_usd and the profit lock is now a USDC amount.
@@ -172,25 +174,18 @@ class RuntimeConfig(BaseModel):
             raise ValueError("daily_profit_lock_usd must be a positive USDC amount or null")
         return v
 
-    @field_validator("max_consecutive_losses")
-    @classmethod
-    def _consecutive(cls, v: int) -> int:
-        if v < 1 or v > cls.HARD_MAX_CONSECUTIVE_LOSSES:
-            raise HardLimitError("max_consecutive_losses must be 1 or 2 (immutable cap)")
-        return v
-
     @field_validator("max_active_positions")
     @classmethod
     def _positions(cls, v: int) -> int:
-        if v != 1:
-            raise HardLimitError("max_active_positions is fixed at 1")
+        if v < 1 or v > cls.HARD_MAX_POSITIONS:
+            raise HardLimitError(f"max_active_positions must be between 1 and {cls.HARD_MAX_POSITIONS}")
         return v
 
     @field_validator("max_entries_per_market")
     @classmethod
     def _entries(cls, v: int) -> int:
-        if v != 1:
-            raise HardLimitError("max_entries_per_market is fixed at 1")
+        if v < 1 or v > cls.HARD_MAX_ENTRIES_PER_MARKET:
+            raise HardLimitError(f"max_entries_per_market must be between 1 and {cls.HARD_MAX_ENTRIES_PER_MARKET}")
         return v
 
     @field_validator("max_ack_latency_ms")
@@ -258,14 +253,6 @@ class RuntimeConfig(BaseModel):
         return v
 
     # ---- range checks for the remaining numeric tunables (every one is dashboard-writable) ----
-    @field_validator("cooldown_minutes")
-    @classmethod
-    def _cooldown(cls, v: int) -> int:
-        # 0 would silently disable the loss-streak protection.
-        if v < 1 or v > 1440:
-            raise ValueError("cooldown_minutes must be between 1 and 1440")
-        return v
-
     @field_validator("trailing_stop_pct")
     @classmethod
     def _trailing(cls, v: Decimal) -> Decimal:

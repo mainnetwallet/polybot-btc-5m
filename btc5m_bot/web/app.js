@@ -242,9 +242,9 @@ function renderState(s, serverTime) {
   renderSignal(s.probability, s.features, s.regime, s.market);
   renderFeeds(s.feeds);
   renderBooks(s.books);
-  renderPosition(s.position);
+  renderPosition(openPositions(s));
   renderRisk(s.risk);
-  renderDecision(s.last_decision, s.position);
+  renderDecision(s.last_decision, openPositions(s));
   renderAlert(s.risk, s.market);
   renderGate(s.live && s.live.gate);
   renderModeSwitch(s);
@@ -394,23 +394,36 @@ function renderBooks(books) {
   }
 }
 
-function renderPosition(p) {
-  if (!p) { kv($("position"), [["status", "flat"]]); return; }
+/* Every open position (up to two). Older state without `positions` falls back to the single one. */
+function openPositions(s) {
+  if (Array.isArray(s.positions)) return s.positions;
+  return s.position ? [s.position] : [];
+}
+
+function renderPosition(list) {
+  const positions = Array.isArray(list) ? list : (list ? [list] : []);
+  if (!positions.length) { kv($("position"), [["status", "flat"]]); return; }
   const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
   const usdc = (v) => (n(v) === null ? "—" : n(v).toFixed(2) + " USDC");
-  const pnl = n(p.unrealized_pnl);
-  const roi = n(p.roi);
-  kv($("position"), [
-    ["side", p.outcome, p.outcome === "UP" ? "up" : "down"],
-    ["invested", usdc(p.cost_basis)],
-    ["entry price", p.avg_price],
-    ["price now", p.mark],
-    ["shares", p.shares],
-    ["value now", usdc(p.value_now)],
-    ["P&L", pnl === null ? "—" : (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDC" + (roi === null ? "" : " (" + (roi >= 0 ? "+" : "") + (roi * 100).toFixed(1) + "%)"), pnl !== null && pnl >= 0 ? "up" : "down"],
-    ["status", p.status],
-    ["market", p.market_id],
-  ]);
+  const rows = [];
+  positions.forEach((p, i) => {
+    // With two positions open, number each row so the two blocks stay apart.
+    const tag = positions.length > 1 ? "#" + (i + 1) + " " : "";
+    const pnl = n(p.unrealized_pnl);
+    const roi = n(p.roi);
+    rows.push(
+      [tag + "side", p.outcome, p.outcome === "UP" ? "up" : "down"],
+      [tag + "invested", usdc(p.cost_basis)],
+      [tag + "entry price", p.avg_price],
+      [tag + "price now", p.mark],
+      [tag + "shares", p.shares],
+      [tag + "value now", usdc(p.value_now)],
+      [tag + "P&L", pnl === null ? "—" : (pnl >= 0 ? "+" : "") + pnl.toFixed(2) + " USDC" + (roi === null ? "" : " (" + (roi >= 0 ? "+" : "") + (roi * 100).toFixed(1) + "%)"), pnl !== null && pnl >= 0 ? "up" : "down"],
+      [tag + "status", p.status],
+      [tag + "market", p.market_id],
+    );
+  });
+  kv($("position"), rows);
 }
 
 function renderAlert(risk, market) {
@@ -421,7 +434,6 @@ function renderAlert(risk, market) {
     const fix = ["Open risk", "#risk"];
     items.push(["Trading is blocked: " + text(risk.detail || risk.reason), fix]);
   }
-  if (market && market.rules_approved === false) items.push(["This market's resolution rules are not approved yet.", ["Approve rules", "#rules"]]);
   for (const [msg, [label, href]] of items) {
     const row = el("div", "alert-row");
     row.appendChild(el("span", null, msg));
@@ -443,7 +455,6 @@ function renderRisk(risk) {
     ["reserved", risk.reserved],
     ["open positions", risk.open_positions],
     ["consecutive losses", risk.consecutive_losses, Number(risk.consecutive_losses) > 0 ? "warn" : ""],
-    ["cooldown until", risk.cooldown_until, risk.cooldown_until ? "warn" : ""],
     ["day locked", risk.locked ? "YES" : "no", risk.locked ? "down" : ""],
     ["profit locked", risk.profit_locked ? "YES" : "no"],
     ["kill switch", risk.kill_switch ? "ENGAGED" : "off", risk.kill_switch ? "down" : "up"],
@@ -464,8 +475,9 @@ function renderPnl(s) {
   const cls = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
 
   const realized = perf ? num(perf.net_pnl) : 0;
-  const unreal = s.position && s.position.unrealized_pnl !== null && s.position.unrealized_pnl !== undefined
-    ? num(s.position.unrealized_pnl) : 0;
+  const held = openPositions(s);
+  const unreal = held.reduce(
+    (sum, p) => sum + (p.unrealized_pnl !== null && p.unrealized_pnl !== undefined ? num(p.unrealized_pnl) : 0), 0);
   const total = realized + unreal;
   const today = s.risk ? num(s.risk.daily_pnl) : 0;
   const wins = perf ? perf.wins : 0;
@@ -489,7 +501,7 @@ function renderPnl(s) {
   cell("Win rate", closed && perf && perf.win_rate !== null ? (perf.win_rate * 100).toFixed(0) + "%" : "—");
   cell("Today", signed(today), cls(today));
   cell("Closed P&L", signed(realized), cls(realized));
-  cell("Open P&L", s.position ? signed(unreal) : "—", s.position ? cls(unreal) : "");
+  cell("Open P&L", held.length ? signed(unreal) : "—", held.length ? cls(unreal) : "");
   box.appendChild(grid);
 }
 
@@ -503,7 +515,7 @@ function sideTag(parent, outcome) {
   parent.appendChild(el("span", "side " + (o === "UP" ? "up" : o === "DOWN" ? "down" : ""), o || "—"));
 }
 
-function renderDecision(d, position) {
+function renderDecision(d, positions) {
   const box = $("decision");
   clear(box);
   box.classList.remove("decision");
@@ -561,24 +573,29 @@ function renderDecision(d, position) {
     box.appendChild(r);
   }
 
-  // What is held right now (always shown while a position is open).
-  const pos = el("div", "dc-pos");
-  if (position && position.shares) {
-    pos.appendChild(el("span", "muted", "Holding now "));
-    sideTag(pos, position.outcome);
-    const roi = position.roi !== null && position.roi !== undefined ? Number(position.roi) : null;
-    pos.appendChild(document.createTextNode(
-      " · " + text(position.shares) + " shares · cost " + fmtUsdt(position.cost_basis)
-    ));
-    if (roi !== null && Number.isFinite(roi)) {
-      pos.appendChild(document.createTextNode(" · ROI "));
-      pos.appendChild(el("span", roi >= 0 ? "up" : "down", (roi >= 0 ? "+" : "") + (roi * 100).toFixed(2) + "%"));
+  // What is held right now (always shown while a position is open), one line per position.
+  const held = (positions || []).filter((p) => p && p.shares);
+  if (held.length) {
+    for (const position of held) {
+      const pos = el("div", "dc-pos");
+      pos.appendChild(el("span", "muted", "Holding now "));
+      sideTag(pos, position.outcome);
+      const roi = position.roi !== null && position.roi !== undefined ? Number(position.roi) : null;
+      pos.appendChild(document.createTextNode(
+        " · " + text(position.shares) + " shares · cost " + fmtUsdt(position.cost_basis)
+      ));
+      if (roi !== null && Number.isFinite(roi)) {
+        pos.appendChild(document.createTextNode(" · ROI "));
+        pos.appendChild(el("span", roi >= 0 ? "up" : "down", (roi >= 0 ? "+" : "") + (roi * 100).toFixed(2) + "%"));
+      }
+      box.appendChild(pos);
     }
   } else {
+    const pos = el("div", "dc-pos");
     pos.appendChild(el("span", "muted", "Holding now "));
     pos.appendChild(document.createTextNode("nothing (flat)"));
+    box.appendChild(pos);
   }
-  box.appendChild(pos);
 
   box.appendChild(el("div", "dc-time muted", text(d.ts, "").replace("T", " ").slice(0, 19)));
 }
@@ -778,7 +795,7 @@ $("mode-live").addEventListener("click", () => switchModeBusy(async () => {
 }));
 
 $("mode-paper").addEventListener("click", () => switchModeBusy(async () => {
-  const openPosition = !!(lastModeState && lastModeState.position);
+  const openPosition = !!(lastModeState && openPositions(lastModeState).length);
   const warning = "Switch to PAPER?\n\nLIVE is revoked and every open exchange order is cancelled."
     + (openPosition ? "\n\nThere is an OPEN position. It will NOT be managed or closed by the bot in PAPER mode: close it first, or manage it on Polymarket yourself." : "");
   if (!window.confirm(warning)) return;
@@ -1031,18 +1048,22 @@ function fillSettingsForm(c) {
   $("cfg-sl").value = c.stop_loss_roi;
   $("cfg-edge").value = c.min_net_edge;
   $("cfg-spread").value = c.max_spread;
-  $("cfg-maxloss").value = c.max_consecutive_losses;
-  $("cfg-cooldown").value = c.cooldown_minutes;
-  $("cfg-rules").checked = !!c.require_rules_approval;
+  $("cfg-maxpos").value = c.max_active_positions;
+  $("cfg-maxentries").value = c.max_entries_per_market;
 }
 
 /* Warn in plain words when the Trade size can never produce an order (it buys fewer shares than the
-   exchange minimum). Without this the bot just shows endless NO_TRADE rows. */
+   exchange minimum) or when the daily loss limit is too tight for it. Without this the bot just
+   shows endless NO_TRADE rows, or stops for the day after one loss. These are warnings only: the
+   values are never changed for the person. */
 function showAdvice(advice) {
   const node = $("cfg-advice");
   if (!node) return;
-  const message = advice && !advice.ok ? advice.message : "";
-  node.textContent = message || "";
+  const parts = [];
+  if (advice && !advice.ok && advice.message) parts.push(advice.message);
+  if (advice && Array.isArray(advice.warnings)) parts.push(...advice.warnings);
+  const message = parts.join(" ");
+  node.textContent = message;
   node.classList.toggle("hidden", !message);
 }
 
@@ -1083,8 +1104,8 @@ $("settings-form").addEventListener("submit", async (event) => {
     ["stop_loss_roi", "cfg-sl", "Stop loss", (v) => v],
     ["min_net_edge", "cfg-edge", "Minimum net edge", (v) => v],
     ["max_spread", "cfg-spread", "Maximum spread", (v) => v],
-    ["max_consecutive_losses", "cfg-maxloss", "Max losses in a row", (v) => v],
-    ["cooldown_minutes", "cfg-cooldown", "Pause after losses", (v) => v],
+    ["max_active_positions", "cfg-maxpos", "Max open positions", (v) => v],
+    ["max_entries_per_market", "cfg-maxentries", "Max entries per market", (v) => v],
   ];
   for (const [key, id, label, conv] of required) {
     const raw = $(id).value.trim();
@@ -1100,7 +1121,6 @@ $("settings-form").addEventListener("submit", async (event) => {
   }
 
   patch.strategy = $("cfg-strategy").value;
-  patch.require_rules_approval = $("cfg-rules").checked;
 
   try {
     const r = await post("/api/config", { patch });
