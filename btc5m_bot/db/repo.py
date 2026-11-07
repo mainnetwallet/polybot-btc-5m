@@ -245,14 +245,17 @@ class Repository:
                 select(PositionRow).where(PositionRow.market_id == market_id, PositionRow.mode == mode)
             )
 
-    def open_position(self, mode: str) -> PositionRow | None:
+    def open_positions(self, mode: str | None = None) -> list[PositionRow]:
+        """Every open (or dust) position, oldest first. Up to two can be open at once."""
+        stmt = (
+            select(PositionRow)
+            .where(PositionRow.status.in_(["OPEN", "DUST"]))
+            .order_by(PositionRow.id.asc())
+        )
+        if mode:
+            stmt = stmt.where(PositionRow.mode == mode)
         with session_scope(self._sf) as s:
-            return s.scalar(
-                select(PositionRow).where(
-                    PositionRow.mode == mode,
-                    PositionRow.status.in_(["OPEN", "DUST"]),
-                )
-            )
+            return list(s.scalars(stmt))
 
     def create_position(
         self,
