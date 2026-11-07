@@ -117,3 +117,51 @@ def test_config_api_returns_the_advice(client):  # noqa: F811
     saved = test_client.post("/api/config", json={"patch": {"trade_size_usd": "3"}}, headers=headers)
     assert saved.status_code == 200
     assert saved.json()["advice"]["ok"] is True
+
+
+# ---- daily loss limit vs trade size -----------------------------------------------------------
+def _limit_advice(trade, limit, *, entries=3, positions=2):
+    return trade_size_advice(
+        trade_size_usd=Decimal(trade), daily_loss_limit_usd=Decimal(limit),
+        max_entries_per_market=entries, max_active_positions=positions,
+    )
+
+
+def test_default_limit_with_a_dollar_trade_warns_that_one_loss_ends_the_day():
+    advice = _limit_advice("1", "1")
+    assert advice["ok"] is True  # a warning, never a refusal
+    (warning,) = advice["warnings"]
+    assert "One full loss reaches it" in warning
+    assert "$2" in warning  # suggested minimum: 2x the trade size
+    assert "$6" in warning  # worst case: $1 x 3 entries x 2 positions
+    assert advice["worst_case_exposure_usd"] == "6.00"
+
+
+def test_limit_under_two_trades_warns_about_two_losses():
+    (warning,) = _limit_advice("3", "5")["warnings"]
+    assert "less than 2 trades" in warning and "$18" in warning
+
+
+def test_a_roomy_limit_has_no_warning_but_still_reports_the_exposure():
+    advice = _limit_advice("3", "6")
+    assert advice["warnings"] == []
+    assert advice["worst_case_exposure_usd"] == "18.00"
+
+
+def test_exposure_uses_the_configured_caps():
+    assert _limit_advice("2", "100", entries=1, positions=1)["worst_case_exposure_usd"] == "2.00"
+    assert _limit_advice("2", "100", entries=2, positions=2)["worst_case_exposure_usd"] == "8.00"
+
+
+def test_no_loss_warning_when_the_trade_size_is_unset():
+    advice = trade_size_advice(trade_size_usd=None, daily_loss_limit_usd=Decimal("1"))
+    assert advice["warnings"] == [] and advice["worst_case_exposure_usd"] is None
+
+
+def test_config_api_warns_but_does_not_change_the_users_values(client):  # noqa: F811
+    test_client, _, _ = client
+    headers = login(test_client)
+    saved = test_client.post("/api/config", json={"patch": {"trade_size_usd": "3"}}, headers=headers)
+    body = saved.json()
+    assert body["advice"]["ok"] is True and body["advice"]["warnings"]
+    assert body["config"]["daily_loss_limit_usd"] == "1"  # untouched

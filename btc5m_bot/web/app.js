@@ -1053,12 +1053,17 @@ function fillSettingsForm(c) {
 }
 
 /* Warn in plain words when the Trade size can never produce an order (it buys fewer shares than the
-   exchange minimum). Without this the bot just shows endless NO_TRADE rows. */
+   exchange minimum) or when the daily loss limit is too tight for it. Without this the bot just
+   shows endless NO_TRADE rows, or stops for the day after one loss. These are warnings only: the
+   values are never changed for the person. */
 function showAdvice(advice) {
   const node = $("cfg-advice");
   if (!node) return;
-  const message = advice && !advice.ok ? advice.message : "";
-  node.textContent = message || "";
+  const parts = [];
+  if (advice && !advice.ok && advice.message) parts.push(advice.message);
+  if (advice && Array.isArray(advice.warnings)) parts.push(...advice.warnings);
+  const message = parts.join(" ");
+  node.textContent = message;
   node.classList.toggle("hidden", !message);
 }
 

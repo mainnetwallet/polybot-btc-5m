@@ -88,10 +88,13 @@ def _row(row: Any) -> dict[str, Any]:
 
 
 def _advice(cfg: RuntimeConfig) -> dict[str, Any]:
-    """Tell the operator, in words, when the Trade size cannot ever produce an order."""
+    """Tell the operator, in words, when the Trade size cannot produce an order or the daily loss limit is too tight for it."""
     return trade_size_advice(
         trade_size_usd=cfg.trade_size_usd,
         min_notional_usd=cfg.min_order_notional_usd,
+        daily_loss_limit_usd=cfg.daily_loss_limit_usd,
+        max_entries_per_market=cfg.max_entries_per_market,
+        max_active_positions=cfg.max_active_positions,
     )
 
 
