@@ -6,6 +6,8 @@ from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from btc5m_bot.clock import FixedClock
 from btc5m_bot.data.series import BtcSeries, BtcTick
 from btc5m_bot.config import Settings
@@ -561,3 +563,167 @@ def test_usdc_buy_then_market_sell_of_every_share_end_to_end(settings, repo, ada
     assert Decimal(sells[0].shares) == Decimal("1.6666")  # every share held
     assert Decimal(sells[0].price) == market.tick_size  # market: no price floor above the lowest tick
     assert repo.get_position(market.market_id, "PAPER").status == "CLOSED"
+
+
+# ------------------------------------------------------------------ regressions: exits and risk
+def _buy_paper_position(engine, adapter, market, *, usdc: str = "10"):
+    """USDC market BUY of UP at 0.60 through the real executor and the paper broker."""
+    up = market.asset_id(Outcome.UP)
+    adapter.set_book(up, bids=[("0.58", "1000")], asks=[("0.60", "1000")], timestamp=START)
+    book = asyncio.run(adapter.get_order_book(up))
+    engine.paper.miss_probability = 0.0  # these tests are about bookkeeping, not random misses
+    intent = engine.journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.BUY,
+        shares=(Decimal(usdc) / Decimal("0.60")).quantize(Decimal("0.0001")),
+        limit_price=Decimal("0.61"), order_type="FOK", mode="PAPER", usdc_amount=Decimal(usdc),
+    )
+    entry = asyncio.run(engine.execution.execute_entry(intent, market, book))
+    assert entry.result.filled_shares > 0
+    return engine.repo.get_position(market.market_id, "PAPER")
+
+
+@pytest.mark.parametrize(
+    ("bid", "config_patch", "lock_reason"),
+    [
+        ("0.20", {}, ReasonCode.DAILY_LOSS_LIMIT),
+        ("0.80", {"daily_profit_lock_usd": "0.5"}, ReasonCode.PROFIT_LOCK),
+    ],
+)
+def test_exit_that_trips_a_daily_lock_still_finishes_its_bookkeeping(
+    settings, repo, adapter, config_store, bid, config_patch, lock_reason
+):
+    """The exit that locked the day died with AttributeError (RiskUpdate had no ``profit_locked``),
+    which skipped the EXIT log line and ``exits.forget()`` on exactly the protective event."""
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    config_store.update(config_patch)
+    asyncio.run(engine._iteration())
+    _buy_paper_position(engine, adapter, market)
+    clock.advance(5)
+    adapter.set_book(
+        market.asset_id(Outcome.UP), bids=[(bid, "1000")], asks=[("0.99", "1000")], timestamp=clock.now()
+    )
+
+    asyncio.run(engine._manage_position(clock.now()))
+
+    assert repo.get_position(market.market_id, "PAPER").status == "CLOSED"
+    assert repo.get_risk_day(START.date()).locked is True
+    assert engine.exits._peak_bid == {}  # exits.forget() ran
+    decisions = repo.recent_decisions(50)
+    assert any(d.decision == "EXIT" and d.reason_code == lock_reason.value for d in decisions)
+    assert any(d.decision == "EXIT" and d.reason_detail.startswith("SELL UP") for d in decisions)
+
+
+def test_open_position_waits_for_resolution_once_the_market_has_ended(settings, repo, adapter, config_store):
+    """After the window ends the venue resolves the market. The bot kept managing the position
+    against its last (stale) book and dumped it with EMERGENCY_EXIT, booking a made-up loss and
+    feeding it to the paper stats that gate LIVE."""
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())
+    _buy_paper_position(engine, adapter, market)
+
+    clock.advance(304)  # the market ended at START + 300 s; the book in hand is from START
+    asyncio.run(engine._manage_position(clock.now()))
+
+    assert repo.get_position(market.market_id, "PAPER").status == "OPEN"
+    assert [o for o in repo.list_orders(mode="PAPER", limit=50) if o.side == "SELL"] == []
+    day = repo.get_risk_day(START.date())
+    assert (day.trades, day.losses) == (0, 0) and day.realized_pnl == Decimal(0)
+
+    # The venue then reports the real result and the normal settlement path books it once.
+    engine._attempt_simulation = lambda machine, now: None
+    adapter.resolutions[market.condition_id] = "UP"
+    clock.advance(11)
+    asyncio.run(engine._settle_windows(clock.now()))
+    assert repo.get_position(market.market_id, "PAPER").status == "SETTLED"
+    day = repo.get_risk_day(START.date())
+    assert (day.trades, day.wins, day.losses) == (1, 1, 0)
+
+
+def test_losing_position_closed_in_two_partial_fills_counts_as_one_loss(settings, repo, adapter, config_store):
+    """Each partial fill was booked as its own losing trade: one position took the loss streak to 2
+    (= max_consecutive_losses) and started the 15 minute cooldown, and trades/losses doubled."""
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    config_store.update({"daily_loss_limit_usd": "1000"})  # keep the daily lock out of this test
+    asyncio.run(engine._iteration())
+    _buy_paper_position(engine, adapter, market)  # 16.6666 shares at 0.60
+    up = market.asset_id(Outcome.UP)
+
+    clock.advance(5)  # first exit: only 6 shares of bid depth, so the FAK sell fills partially
+    adapter.set_book(up, bids=[("0.30", "6")], asks=[("0.35", "100")], timestamp=clock.now())
+    asyncio.run(engine._manage_position(clock.now()))
+    partial = repo.get_position(market.market_id, "PAPER")
+    assert partial.status == "OPEN" and partial.shares == Decimal("10.6666")
+    day = repo.get_risk_day(START.date())
+    assert (day.trades, day.wins, day.losses) == (0, 0, 0)  # the position is still open
+    assert day.realized_pnl < 0  # but the money already lost is in the daily P&L
+    assert repo.get_risk_state().consecutive_losses == 0
+
+    clock.advance(3)  # past the 2 s exit-retry throttle: the rest is swept
+    adapter.set_book(up, bids=[("0.30", "100")], asks=[("0.35", "100")], timestamp=clock.now())
+    asyncio.run(engine._manage_position(clock.now()))
+    closed = repo.get_position(market.market_id, "PAPER")
+    assert closed.status == "CLOSED"
+    day = repo.get_risk_day(START.date())
+    state = repo.get_risk_state()
+    assert (day.trades, day.wins, day.losses) == (1, 0, 1)
+    assert state.consecutive_losses == 1 and state.cooldown_until is None
+    assert day.realized_pnl == closed.realized_pnl  # daily P&L is the sum of both fills
+    assert engine.risk.status(Mode.PAPER, now=clock.now()).reason is not ReasonCode.COOLDOWN
+
+
+def test_position_with_a_partial_exit_is_judged_on_its_total_pnl_at_settlement(settings, repo, adapter, config_store):
+    """A big loss on a partial exit, then a small gain on the shares that ride to settlement: the
+    position lost money overall, so it is one loss and the streak must not be reset by the gain."""
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    config_store.update({"daily_loss_limit_usd": "1000"})  # keep the daily lock out of this test
+    asyncio.run(engine._iteration())
+    _buy_paper_position(engine, adapter, market)  # 16.6666 shares at 0.60
+    up = market.asset_id(Outcome.UP)
+
+    clock.advance(5)  # 12 of the 16.6666 shares sell at 0.10; the rest stays open
+    adapter.set_book(up, bids=[("0.10", "12")], asks=[("0.15", "100")], timestamp=clock.now())
+    asyncio.run(engine._manage_position(clock.now()))
+    partial = repo.get_position(market.market_id, "PAPER")
+    assert partial.status == "OPEN" and partial.shares == Decimal("4.6666")
+    assert partial.realized_pnl < 0
+
+    clock.advance(300)  # the market has ended: the remainder is held, not sold
+    asyncio.run(engine._manage_position(clock.now()))
+    assert repo.get_position(market.market_id, "PAPER").shares == Decimal("4.6666")
+
+    engine._attempt_simulation = lambda machine, now: None
+    adapter.resolutions[market.condition_id] = "UP"  # the remaining shares pay out in full
+    clock.advance(11)
+    asyncio.run(engine._settle_windows(clock.now()))
+    settled = repo.get_position(market.market_id, "PAPER")
+    assert settled.status == "SETTLED"
+    settlement = next(t for t in repo.list_trades(limit=10) if t.kind == "SETTLEMENT")
+    assert settlement.realized_pnl > 0  # the settlement leg alone made money...
+    assert settled.realized_pnl < 0  # ...but the position as a whole lost
+    day = repo.get_risk_day(START.date())
+    assert (day.trades, day.wins, day.losses) == (1, 0, 1)
+    assert repo.get_risk_state().consecutive_losses == 1
+    assert day.realized_pnl == settled.realized_pnl
+
+
+def test_engine_without_an_oracle_builds_its_own_twap_tracker(settings, repo, adapter, config_store):
+    """``TwapTracker(60)`` passed the window positionally to a keyword-only constructor."""
+    clock = FixedClock(START)
+    engine = BotEngine(
+        settings=settings,
+        repo=repo,
+        adapter=adapter,
+        config_store=config_store,
+        clock=clock,
+        feeds={"binance": DummyFeed("binance", _series("binance")), "coinbase": DummyFeed("coinbase", _series("coinbase"))},
+        oracle=None,
+        recorder=DummyRecorder(),
+        paper=PaperBroker(Decimal("100"), clock),
+        start_api=False,
+    )
+    assert isinstance(engine.tracker, TwapTracker)
+    assert engine.tracker.window_seconds == 60

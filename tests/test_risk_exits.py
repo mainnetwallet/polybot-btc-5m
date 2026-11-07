@@ -535,3 +535,136 @@ def test_exit_is_a_market_sell_with_no_price_floor_above_the_lowest_tick():
         assert decision.action is ExitAction.SELL
         assert decision.shares == Decimal("10")
         assert decision.limit_price == market.tick_size
+
+
+# ------------------------------------------------------------------ regressions
+# A RiskUpdate must say whether the lock it reports is the profit lock: the engine reads
+# ``update.profit_locked`` right after an exit and used to crash with AttributeError.
+def test_risk_update_reports_a_profit_lock_to_the_caller(clock, repo):
+    risk = manager(clock, repo, config(daily_profit_lock_usd=Decimal("50")))
+    update = risk.record_result(realized_pnl=Decimal("50"), market_id="a", mode=Mode.PAPER)
+    assert update.locked is True and update.profit_locked is True
+
+
+def test_risk_update_does_not_call_a_loss_limit_lock_a_profit_lock(clock, repo):
+    risk = manager(clock, repo)
+    ordinary = risk.record_result(realized_pnl=Decimal("-1"), market_id="a", mode=Mode.PAPER)
+    assert ordinary.locked is False and ordinary.profit_locked is False
+    limit = risk.record_result(realized_pnl=Decimal("-40.01"), market_id="b", mode=Mode.PAPER)
+    assert limit.locked is True and limit.profit_locked is False
+
+
+def test_partial_exit_fill_moves_daily_pnl_but_not_the_loss_streak(clock, repo):
+    risk = manager(clock, repo)
+    partial = risk.record_result(
+        realized_pnl=Decimal("-0.20"), market_id="a", mode=Mode.PAPER, position_closed=False
+    )
+    assert partial.consecutive_losses == 0 and partial.cooldown_until is None
+    day = repo.get_risk_day(START.date())
+    assert day.realized_pnl == Decimal("-0.20")
+    assert (day.trades, day.wins, day.losses) == (0, 0, 0)
+
+    final = risk.record_result(
+        realized_pnl=Decimal("-0.15"), market_id="a", mode=Mode.PAPER, position_pnl=Decimal("-0.35")
+    )
+    assert final.consecutive_losses == 1 and final.cooldown_until is None
+    day = repo.get_risk_day(START.date())
+    assert day.realized_pnl == Decimal("-0.35")
+    assert (day.trades, day.wins, day.losses) == (1, 0, 1)
+
+
+def test_one_losing_position_in_two_fills_does_not_start_the_cooldown(clock, repo):
+    # max_consecutive_losses is 2: a single position that happened to close in two fills used to
+    # count as two losses and put the bot into its 15 minute cooldown.
+    risk = manager(clock, repo)
+    risk.record_result(realized_pnl=Decimal("-0.30"), market_id="a", mode=Mode.PAPER, position_closed=False)
+    final = risk.record_result(
+        realized_pnl=Decimal("-0.30"), market_id="a", mode=Mode.PAPER, position_pnl=Decimal("-0.60")
+    )
+    assert final.consecutive_losses == 1
+    assert final.cooldown_until is None
+    allowed, reason, _ = risk.pre_trade_check(
+        market_id="b", mode=Mode.PAPER, planned_loss=Decimal("1"),
+        planned_cost=Decimal("1"), balance=BALANCE, recovery_ready=True,
+    )
+    assert reason is not ReasonCode.COOLDOWN and reason is not ReasonCode.CONSECUTIVE_LOSS_LIMIT
+
+
+def test_position_is_a_win_or_a_loss_by_its_total_pnl_not_by_its_last_fill(clock, repo):
+    risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("500")))
+    # -0.30 on the first fill, +0.05 on the last: the position lost 0.25 overall
+    risk.record_result(realized_pnl=Decimal("-0.30"), market_id="a", mode=Mode.PAPER, position_closed=False)
+    lost = risk.record_result(
+        realized_pnl=Decimal("0.05"), market_id="a", mode=Mode.PAPER, position_pnl=Decimal("-0.25")
+    )
+    assert lost.consecutive_losses == 1
+    # -0.10 then +0.30: the position made 0.20 overall, which ends the streak
+    risk.record_result(realized_pnl=Decimal("-0.10"), market_id="b", mode=Mode.PAPER, position_closed=False)
+    won = risk.record_result(
+        realized_pnl=Decimal("0.30"), market_id="b", mode=Mode.PAPER, position_pnl=Decimal("0.20")
+    )
+    assert won.consecutive_losses == 0
+    day = repo.get_risk_day(START.date())
+    assert (day.trades, day.wins, day.losses) == (2, 1, 1)
+    assert day.realized_pnl == Decimal("-0.05")
+
+
+def test_partial_exit_fill_still_counts_toward_the_daily_loss_limit(clock, repo):
+    risk = manager(clock, repo, config(daily_loss_limit_usd=Decimal("1")))
+    update = risk.record_result(
+        realized_pnl=Decimal("-1.20"), market_id="a", mode=Mode.PAPER, position_closed=False
+    )
+    assert update.locked is True and "DAILY_LOSS_LIMIT" in update.events
+    assert risk.status(Mode.PAPER).locked is True
+
+
+def test_ended_market_is_held_for_resolution_never_sold_into_a_stale_bid():
+    # 304 s after the open the 5-minute market is over. The bid the bot still holds is old, so the
+    # stale-book emergency rule used to dump the position at that price instead of waiting for the
+    # venue's resolution.
+    exits = HybridExitManager()
+    market = make_market()
+    stale = make_book(market.asset_id(Outcome.UP), bid="0.58", bid_size="100", ts=START)
+    after_end = START + timedelta(seconds=304)
+    for remaining in (0, -4, None):  # None: derived from market.end_date
+        decision = exits.evaluate(
+            position=position(), market=market, up_book=stale, down_book=None, probability=None,
+            config=config(), now=after_end, remaining_seconds=remaining, book_max_age_ms=2000,
+        )
+        assert decision.action is ExitAction.HOLD, remaining
+        assert decision.reason == "MARKET_ENDED_HOLD_TO_RESOLUTION"
+
+
+def test_ended_market_is_held_even_with_every_emergency_flag_raised():
+    exits = HybridExitManager()
+    market = make_market()
+    decision = exits.evaluate(
+        position=position(), market=market,
+        up_book=make_book(market.asset_id(Outcome.UP), bid="0.10", bid_size="100", ts=START),
+        down_book=None, probability=None, config=config(), now=START + timedelta(seconds=301),
+        remaining_seconds=-1, risk_locked=True, feed_healthy=False, oracle_healthy=False,
+        recovery_ready=False, book_max_age_ms=2000,
+    )
+    assert decision.action is ExitAction.HOLD
+    assert decision.reason == "MARKET_ENDED_HOLD_TO_RESOLUTION"
+
+
+def test_ended_market_with_no_book_is_still_a_hold():
+    exits = HybridExitManager()
+    decision = exits.evaluate(
+        position=position(), market=make_market(), up_book=None, down_book=None,
+        probability=None, config=config(), now=START + timedelta(seconds=310), remaining_seconds=-10,
+    )
+    assert decision.action is ExitAction.HOLD
+
+
+def test_exit_rules_stay_live_until_the_market_actually_ends():
+    # The hold only starts once the window is over: with one second left a stop-loss still sells.
+    exits = HybridExitManager()
+    market = make_market()
+    low = make_book(market.asset_id(Outcome.UP), bid="0.35", bid_size="100")
+    decision = exits.evaluate(
+        position=position(), market=market, up_book=low, down_book=None, probability=None,
+        config=config(), now=START + timedelta(seconds=299), remaining_seconds=1,
+    )
+    assert decision.action is ExitAction.SELL and decision.reason == "STOP_LOSS"

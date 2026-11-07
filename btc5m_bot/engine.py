@@ -121,7 +121,7 @@ class BotEngine:
         self.clock = clock
         self.feeds = feeds
         self.oracle = oracle
-        self.tracker = oracle.tracker if oracle else TwapTracker(60)
+        self.tracker = oracle.tracker if oracle else TwapTracker(window_seconds=60)
         self.recorder = recorder
         self.paper = paper
         self.state = state or EngineStateStore()
@@ -1131,11 +1131,17 @@ class BotEngine:
         if outcome_result.result.filled_shares > 0:
             self.state.increment("exits")
             self._last_analytics = float("-inf")
+            # A position is one trade however many fills it takes to close it. A partial fill only
+            # moves the daily P&L; the fill that closes it counts the win/loss and the loss streak
+            # once, judged on the position's total P&L (``realized_pnl`` is cumulative on the row).
+            position_after = outcome_result.position
             update = self.risk.record_result(
                 realized_pnl=outcome_result.realized_pnl,
                 market_id=market.market_id,
                 mode=self._effective_mode,
                 now=now,
+                position_closed=position_after is None or position_after.status == "CLOSED",
+                position_pnl=position_after.realized_pnl if position_after is not None else None,
             )
             if update.locked:
                 self._note(now, "EXIT", ReasonCode.PROFIT_LOCK if update.profit_locked else ReasonCode.DAILY_LOSS_LIMIT, "daily limit reached after exit")
@@ -1404,7 +1410,14 @@ class BotEngine:
                 for settlement in self.paper.settle(market, actual):
                     if settlement.market_id == market.market_id:
                         realized = settlement.realized_pnl
-            self.risk.record_result(realized_pnl=realized, market_id=market.market_id, mode=self._effective_mode, now=now)
+            # ``position.realized_pnl`` already holds any partial exits, so judge the trade on the total.
+            self.risk.record_result(
+                realized_pnl=realized,
+                market_id=market.market_id,
+                mode=self._effective_mode,
+                now=now,
+                position_pnl=position.realized_pnl + realized,
+            )
             self.state.increment("settlements")
             self._last_analytics = float("-inf")  # show the new win/loss right away
             self._note(

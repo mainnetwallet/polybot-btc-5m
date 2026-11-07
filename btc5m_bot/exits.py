@@ -166,6 +166,20 @@ class HybridExitManager:
         if position.status in {"CLOSED", "SETTLED", "REDEEMED"} or position.shares <= 0:
             return self._hold("NOT_OPEN", "position is not open", 0)
 
+        if remaining_seconds is None:
+            remaining_seconds = (as_utc(market.end_date) - now).total_seconds()
+        if remaining_seconds <= 0:
+            # The window is over, so the position settles on the venue's resolution. Whatever book
+            # the bot still holds is stale (or a failed fetch kept the last one), nothing can be
+            # traded against it, and an exit sent into it would book a loss that never happened.
+            # This outranks every rule below, emergencies included.
+            return self._hold(
+                "MARKET_ENDED_HOLD_TO_RESOLUTION",
+                "market window has ended; waiting for the venue's resolution",
+                90,
+                metadata={"remaining_seconds": remaining_seconds},
+            )
+
         key = f"{position.id}:{position.asset_id}"
         p_own = self._probability_for(probability, position)
         schedule = FeeSchedule.from_market(market)
@@ -193,9 +207,6 @@ class HybridExitManager:
             self.dirty = True
         self._peak_bid[key] = peak
         trailing_armed = peak > position.avg_price
-
-        if remaining_seconds is None:
-            remaining_seconds = (as_utc(market.end_date) - now).total_seconds()
 
         # Dynamic TP: lock a weak edge earlier. The target is never raised above take_profit_roi:
         # a position at or past the configured target must sell (a strong favourite used to push

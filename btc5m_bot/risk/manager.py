@@ -47,6 +47,8 @@ class RiskUpdate:
     locked: bool
     kill_switch: bool
     events: tuple[str, ...] = ()
+    # True when the day's lock is the daily PROFIT lock (``locked`` alone also covers the loss limit).
+    profit_locked: bool = False
 
 
 class RiskManager:
@@ -196,7 +198,18 @@ class RiskManager:
         market_id: str,
         mode: Mode,
         now: datetime | None = None,
+        position_closed: bool = True,
+        position_pnl: Decimal | None = None,
     ) -> RiskUpdate:
+        """Book realized P&L.
+
+        ``realized_pnl`` is the P&L of this one fill or settlement; it always moves the daily P&L
+        and the daily loss/profit locks. A position is a single trade, though: while it is still
+        open (``position_closed=False``, a partial exit fill) nothing else is touched, and the call
+        that closes it counts the trade, win/loss and loss streak once. That count is decided by
+        ``position_pnl``, the position's total P&L over all of its fills (default: ``realized_pnl``),
+        so a position that lost money overall is a loss even if its last fill was a small gain.
+        """
         now = as_utc(now or self.clock.now())
         cfg = self._cfg()
         day = self.repo.get_risk_day(self._today(now))
@@ -204,26 +217,28 @@ class RiskManager:
         events: list[str] = []
 
         day_pnl = day.realized_pnl + realized_pnl
-        trades = day.trades + 1
-        wins = day.wins + (1 if realized_pnl > 0 else 0)
-        losses = day.losses + (1 if realized_pnl < 0 else 0)
+        trades, wins, losses = day.trades, day.wins, day.losses
         consecutive = state.consecutive_losses
-        if realized_pnl > 0:
-            consecutive = 0
-        elif realized_pnl < 0:
-            consecutive += 1
-
         cooldown_until = state.cooldown_until
-        if realized_pnl < 0 and consecutive >= cfg.max_consecutive_losses:
-            cooldown_until = now + timedelta(minutes=cfg.cooldown_minutes)
-            events.append("CONSECUTIVE_LOSS_LIMIT")
-            self.repo.add_protection_event(
-                "CONSECUTIVE_LOSS_LIMIT",
-                "WARN",
-                market_id=market_id,
-                consecutive_losses=consecutive,
-                cooldown_until=cooldown_until.isoformat(),
-            )
+        if position_closed:
+            outcome_pnl = realized_pnl if position_pnl is None else position_pnl
+            trades += 1
+            if outcome_pnl > 0:
+                wins += 1
+                consecutive = 0
+            elif outcome_pnl < 0:
+                losses += 1
+                consecutive += 1
+                if consecutive >= cfg.max_consecutive_losses:
+                    cooldown_until = now + timedelta(minutes=cfg.cooldown_minutes)
+                    events.append("CONSECUTIVE_LOSS_LIMIT")
+                    self.repo.add_protection_event(
+                        "CONSECUTIVE_LOSS_LIMIT",
+                        "WARN",
+                        market_id=market_id,
+                        consecutive_losses=consecutive,
+                        cooldown_until=cooldown_until.isoformat(),
+                    )
 
         locked = day.locked
         profit_locked = day.profit_lock_triggered
@@ -260,7 +275,8 @@ class RiskManager:
             locked=locked,
             profit_lock_triggered=profit_locked,
         )
-        self.repo.update_risk_state(consecutive_losses=consecutive, cooldown_until=cooldown_until)
+        if position_closed:
+            self.repo.update_risk_state(consecutive_losses=consecutive, cooldown_until=cooldown_until)
         return RiskUpdate(
             realized_pnl=realized_pnl,
             daily_pnl=day_pnl,
@@ -269,6 +285,7 @@ class RiskManager:
             locked=locked,
             kill_switch=state.kill_switch,
             events=tuple(events),
+            profit_locked=profit_locked,
         )
 
     # ------------------------------------------------------------- protections
