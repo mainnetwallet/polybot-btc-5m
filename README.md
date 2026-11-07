@@ -15,21 +15,22 @@ passes a strict 24-condition gate and types an explicit confirmation phrase.
 |---|---|
 | Order size | Every buy is a USDC market order for exactly `trade_size_usd` dollars; the share count is whatever that buys. **No default: while `trade_size_usd` is unset the bot places no trades** (`TRADE_SIZE_NOT_SET`). The only minimum is `min_order_notional_usd` (default **$1**); a smaller amount is refused (`BELOW_MIN_ORDER`), never rounded up. The Settings page warns when the Trade size cannot work |
 | Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1, must be > 0). Configurable in the dashboard Settings; a lock it triggers cannot be bypassed |
-| Consecutive losses before cooldown | max **2** (hard cap), then a cooldown of `cooldown_minutes` (default 15, allowed 1 to 1440) |
-| Concurrent positions | **1** |
-| Entries per market | **1** |
-| Entry window | **120 seconds** from market start |
-| Martingale / averaging down / auto risk increase | **never implemented** |
+| Loss-streak cooldown | **none**: any number of losses in a row is allowed; the daily loss limit is the loss guard |
+| Concurrent positions | up to **2** (`max_active_positions`, default 2, hard cap 2), in different markets, e.g. the one still settling plus the new one |
+| Entries per market | up to **3** (`max_entries_per_market`, default 3, hard cap 3). A 2nd or 3rd entry only tops up the position already held, on the same side, and only while that position is **in profit**; never after an exit in that market |
+| Entry window | **150 seconds** from market start |
+| Martingale / averaging down / auto risk increase | **never implemented** (a top-up happens only while in profit, never to average down a loser) |
 | Raising size to meet exchange minimums | **never** — returns `BELOW_MIN_ORDER` |
-| Resolution source | **Chainlink only**; Pyth/spot never substituted |
-| Unknown resolution rules | **NO TRADE** |
+| Resolution rules / source | **Not a trading gate.** Rules are recorded and approved automatically; unknown, unapproved or non-Chainlink rule text no longer blocks a trade (it only lowers the model's confidence a little) |
 | LIVE gate | **24 conditions**, all must pass, plus typed phrase |
 
-The hard caps (2 consecutive losses, 1 position, 1 entry per market, 120-second entry
-window) are enforced by `RuntimeConfig` validators, not just documentation. Exceeding them raises
+The hard caps (2 positions, 3 entries per market, 150-second entry window) are enforced by
+`RuntimeConfig` validators, not just documentation. Exceeding them raises
 `HardLimitError`. Every other numeric setting has a range check, and the dashboard API answers
-`400` with the reason when a value is out of range. The daily loss limit and the cooldown length
-are dashboard-writable within their ranges.
+`400` with the reason when a value is out of range. The daily loss limit and the position/entry
+caps are dashboard-writable within their ranges. Because every entry spends `trade_size_usd`, the most
+that can be at risk at once is `trade_size_usd` × 3 entries × 2 positions; keep `daily_loss_limit_usd`
+well above one full loss.
 
 ---
 
@@ -143,16 +144,11 @@ if every condition passes, asks you to type `ACTIVATE LIVE TRADING`; the server 
 is **not** closed by switching: the bot does not manage it in PAPER, so close it first. The mode is not
 editable through the settings form or `/api/config`.
 
-### 7. Approve the resolution rule
+### 7. Resolution rules (nothing to do)
 
-Open the **Rules** tab, compare each fingerprint's rule text with the live market metadata,
-and approve only what you have verified:
-
-```bat
-.venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
-```
-
-Until a rule is approved the bot records `RULES_UNAPPROVED` and does not trade.
+The bot approves every resolution rule automatically and does not wait for any approval. The **Rules**
+tab still lists each fingerprint and its rule text for reference, and `approve-rule` still exists, but
+no trade depends on it.
 
 ### 8. Day-to-day commands
 
@@ -247,8 +243,8 @@ and the typed activation phrase).
 | `/healthz` | liveness, Render `healthCheckPath` | 200 while the process is serving |
 | `/health` | readiness, UptimeRobot | 200 only if the supervisor is `RUNNING`, the engine process is alive and its lease is fresh; otherwise 503 with a `reason` |
 
-`/health` reports outages. A bot that is alive but intentionally not trading (unapproved rule,
-a too-small trade size, unhealthy feeds) still returns 200. Details and the full list of reason codes are in
+`/health` reports outages. A bot that is alive but intentionally not trading (a too-small trade size,
+unhealthy feeds) still returns 200. Details and the full list of reason codes are in
 [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ### Free plan limits
@@ -286,12 +282,12 @@ parquet market recordings and log files (large and disposable), which still use 
 virtual USDC (`POLYBOT_PAPER_START_BALANCE_USD`) and resolution rules are auto-approved in PAPER mode on every start, so neither has to
 be set after a restart. Without a settings database the master trading switch is OFF after every start (the settings file is
 wiped on the free plan), so open **Settings** and press **Turn ON** before the bot will open a paper trade.
-No Render variable is needed for any of this. Change trade size, loss limits, rule auto-approval and every other
+No Render variable is needed for any of this. Change trade size, loss limits and every other
 trading option on the dashboard **Settings** page, not in environment variables.
 
 `.env` / Render variables hold only keys and passwords (dashboard hash and session secret, CLOB API
 credentials, wallet key) plus optional hosting options (ports, folders, heartbeat for LIVE).
-Resolution rules can also be approved from the Rules page. Note: on Render free without
+Note: on Render free without
 `POLYBOT_DATABASE_URL` the disk is wiped on every restart, so Settings you changed fall back to their
 defaults after a restart.
 
@@ -307,12 +303,8 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
 
 1. Run in PAPER and let it collect data. Without CLOB credentials the oracle is
    `UNVERIFIED`, feed health blocks entries, and the bot records NO TRADE — by design.
-2. Open **Rules** and review each resolution-rule fingerprint. Approve only the rule
-   text you verified against the live market metadata:
-   ```bat
-   .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
-   ```
-   Approval is recorded with an audit entry. Unknown or ambiguous rules stay blocked.
+2. Resolution rules need no approval: the bot approves them automatically (with an audit entry) and
+   never blocks a trade because of the rule text.
 3. Configure the trade size in the dashboard or `config\runtime.json`.
    Every entry is a USDC market buy of exactly `trade_size_usd` dollars (`1` → $1, `3` → $3). There is no
    default: **if it is not set, no trade is placed** (`TRADE_SIZE_NOT_SET`). The amount is never increased to
@@ -412,8 +404,7 @@ btc5m_bot/
 Each `_iteration()` refreshes mode, optionally refreshes the gate, discovers markets,
 ticks lifecycle, refreshes balance/books/feed health/features/probability, records data,
 manages exits, evaluates entry, settles expired windows, backs up, refreshes analytics,
-and publishes state. Entry is fail-closed at every stage: recovery, feed health, rule
-verification/approval, risk, data age, book age, probability, regime, MTF conflict,
+and publishes state. Entry is fail-closed at every stage: recovery, feed health, risk, data age, book age, probability, regime, MTF conflict,
 spread, fee verification, depth, EV, SELL feasibility, filters, latency, and
 acknowledgement window.
 

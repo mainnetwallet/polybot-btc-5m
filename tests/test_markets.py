@@ -148,15 +148,15 @@ def test_methodology_never_guesses_from_twap_wording():
     )
 
 
-def test_lifecycle_enforces_120_second_cutoff():
+def test_lifecycle_enforces_150_second_cutoff():
     market = make_market()
     machine = MarketStateMachine(market)
     assert machine.state is MarketState.DISCOVERED
     assert machine.tick(START) is not None
     assert machine.state is MarketState.ACTIVE
-    assert machine.entry_allowed(START + timedelta(seconds=119))
-    assert not machine.entry_allowed(START + timedelta(seconds=120))
-    machine.tick(START + timedelta(seconds=120))
+    assert machine.entry_allowed(START + timedelta(seconds=149))
+    assert not machine.entry_allowed(START + timedelta(seconds=150))
+    machine.tick(START + timedelta(seconds=150))
     assert machine.state is MarketState.ENTRY_CLOSED
     machine.tick(START + timedelta(seconds=300))
     assert machine.state is MarketState.RESOLVING

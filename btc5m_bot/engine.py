@@ -53,6 +53,7 @@ from .risk import ExposureLedger, RiskManager, RiskStatus
 from .sizing import size_position
 from .state import EngineStateStore
 from .types import (
+    ENTRY_WINDOW_SECONDS,
     FeatureMode,
     FeedHealth,
     MarketInfo,
@@ -454,19 +455,16 @@ class BotEngine:
 
     # --------------------------------------------------------------- discovery
 
-    def _maybe_auto_approve_rule(self, fingerprint: str, cfg: Any) -> Any:
-        """Approve a rule automatically (dashboard setting / pinned env fingerprints)."""
-        pinned = fingerprint.lower() in self.settings.pinned_rule_fingerprints
-        auto = cfg.auto_approve_rules and cfg.mode.value != "LIVE"
-        if not (pinned or auto):
-            return None
-        self.repo.approve_resolution_rule(fingerprint, "env-auto-approve")
+    def _auto_approve_rule(self, fingerprint: str) -> Any:
+        """Resolution rules are approved automatically; the bot never waits for a manual approval."""
+        self.repo.approve_resolution_rule(fingerprint, "auto-approve")
         self.repo.audit(
             "RESOLUTION_RULE_APPROVED",
-            actor="env-auto-approve",
-            detail={"fingerprint": fingerprint, "via": "pinned" if pinned else "auto_paper"},
+            actor="auto-approve",
+            detail={"fingerprint": fingerprint, "via": "auto"},
         )
         return self.repo.get_resolution_rule(fingerprint)
+
     async def _maybe_discover(self, now: datetime) -> None:
         mono = self.clock.monotonic()
         if mono - self._last_discovery < DISCOVERY_SECONDS and self._machines:
@@ -478,7 +476,6 @@ class BotEngine:
             log.warning("market discovery failed: %s", exc)
             self.repo.add_protection_event("DISCOVERY_FAILURE", "WARN", error=str(exc)[:500])
             return
-        cfg = self._config()
         for info in markets:
             errors = info.validate()
             if errors:
@@ -493,12 +490,7 @@ class BotEngine:
                 self.repo.upsert_resolution_rule(spec.to_db())
                 rule = self.repo.get_resolution_rule(spec.fingerprint)
                 if rule is not None and not rule.approved:
-                    rule = self._maybe_auto_approve_rule(spec.fingerprint, cfg) or rule
-                if rule is not None and cfg.require_rules_approval and not rule.approved:
-                    self.repo.set_state(
-                        "pending_rule",
-                        {"fingerprint": spec.fingerprint, "market_id": info.market_id, "methodology": spec.methodology.value},
-                    )
+                    rule = self._auto_approve_rule(spec.fingerprint) or rule
             machine = self._machines.get(info.market_id)
             if machine is None:
                 row = self.repo.get_window(info.market_id)
@@ -789,11 +781,18 @@ class BotEngine:
             elif now >= machine.end:
                 self._note(now, "NO_TRADE", ReasonCode.ENTRY_WINDOW_CLOSED, "market ended")
             else:
-                self._note(now, "NO_TRADE", ReasonCode.ENTRY_WINDOW_CLOSED, "120-second entry window closed")
+                self._note(now, "NO_TRADE", ReasonCode.ENTRY_WINDOW_CLOSED, f"{ENTRY_WINDOW_SECONDS}-second entry window closed")
             return
-        if self.ledger.has_active_position(self._effective_mode.value):
-            return
-        if self.ledger.entries_used(market.market_id, self._effective_mode.value) >= cfg.max_entries_per_market:
+        mode_value = self._effective_mode.value
+        open_positions = self.ledger.open_positions(mode_value)
+        market_position = next((pos for pos in open_positions if pos.market_id == market.market_id), None)
+        if market_position is None:
+            if len(open_positions) >= cfg.max_active_positions:
+                return
+            if self.repo.get_position(market.market_id, mode_value) is not None:
+                # Already exited (or settled) in this market: no re-entry after an exit.
+                return
+        if self.ledger.entries_used(market.market_id, mode_value) >= cfg.max_entries_per_market:
             return
         if self._recovery_result is None or not self._recovery_result.ready:
             self._note(now, "NO_TRADE", ReasonCode.RECOVERY_NOT_READY, "recovery not READY")
@@ -811,17 +810,6 @@ class BotEngine:
         if self._composite is None or not self._composite.can_enter:
             reason = "; ".join(self._composite.reasons) if self._composite else "feeds unavailable"
             self._note(now, "NO_TRADE", ReasonCode.FEED_UNHEALTHY, reason)
-            return
-        rule = self.repo.get_resolution_rule(market.rules_fingerprint)
-        rule_confidence = str(market.raw.get("rule_spec", {}).get("confidence", "LOW"))
-        if rule is None or market.methodology.window_seconds == 0 and market.methodology.value != "SINGLE_PRICE_SNAPSHOT":
-            self._note(now, "NO_TRADE", ReasonCode.RULES_UNVERIFIED, "resolution rules not registered")
-            return
-        if rule_confidence not in {"HIGH", "MEDIUM"}:
-            self._note(now, "NO_TRADE", ReasonCode.RULES_UNVERIFIED, f"rule confidence {rule_confidence}")
-            return
-        if cfg.require_rules_approval and not rule.approved:
-            self._note(now, "NO_TRADE", ReasonCode.RULES_UNAPPROVED, f"rule {rule.fingerprint[:12]} awaiting user approval")
             return
         risk_gate = self.risk.status(self._effective_mode, balance=self._balance, now=now)
         if not risk_gate.allowed:
@@ -872,6 +860,22 @@ class BotEngine:
         if book is None or book.best_ask is None:
             self._note(now, "NO_TRADE", ReasonCode.INSUFFICIENT_DEPTH, "no ask liquidity", probability=p.p_up)
             return
+        if market_position is not None:
+            # 2nd/3rd entry in a market: only a top-up of the same side, and only while it is in profit.
+            if market_position.outcome.upper() != outcome.value:
+                self._note(
+                    now, "NO_TRADE", ReasonCode.ENTRY_ALREADY_USED,
+                    f"holding {market_position.outcome}; a further entry must be on the same side", probability=p.p_up,
+                )
+                return
+            held_book = f.up_book if outcome is Outcome.UP else f.down_book
+            bid = held_book.best_bid if held_book is not None else None
+            if bid is None or bid * market_position.shares <= market_position.cost_basis:
+                self._note(
+                    now, "NO_TRADE", ReasonCode.ENTRY_ALREADY_USED,
+                    "position is not in profit; further entries only while in profit", probability=p.p_up,
+                )
+                return
         if book.spread is None or book.spread > cfg.max_spread:
             self._note(now, "NO_TRADE", ReasonCode.SPREAD_TOO_WIDE, f"spread {book.spread}", probability=p.p_up)
             return
@@ -1058,9 +1062,10 @@ class BotEngine:
         )
 
     async def _manage_position(self, now: datetime) -> None:
-        position = self.ledger.active_position(self._effective_mode.value)
-        if position is None:
-            return
+        for position in self.ledger.open_positions(self._effective_mode.value):
+            await self._manage_one_position(now, position)
+
+    async def _manage_one_position(self, now: datetime, position) -> None:
         machine = self._machines.get(position.market_id)
         if machine is None:
             self._note(now, "NO_TRADE", ReasonCode.MARKET_NOT_VALIDATED, "position market metadata missing; cannot manage exit")
@@ -1071,18 +1076,26 @@ class BotEngine:
         status = self.risk.status(self._effective_mode, balance=self._balance, now=now)
         cfg = self._config()
         health = self._composite
-        features = self._features if self._features is not None and self._features.ts == now else None
+        # Features and the probability estimate describe the market that is active now; a position in
+        # an older market (still settling) must not be judged by them.
+        active = self._active_market(now)
+        on_active_market = active is not None and active.market.market_id == position.market_id
+        features = (
+            self._features
+            if on_active_market and self._features is not None and self._features.ts == now
+            else None
+        )
         decision = self.exits.evaluate(
             position=position,
             market=market,
             up_book=up_book,
             down_book=down_book,
-            probability=self._probability,
+            probability=self._probability if on_active_market else None,
             config=cfg,
             features=features,
             now=now,
             remaining_seconds=machine.seconds_remaining(now),
-            risk_locked=status.kill_switch or status.locked or status.reason is ReasonCode.COOLDOWN,
+            risk_locked=status.kill_switch or status.locked,
             feed_healthy=bool(health and health.primary.health is FeedHealth.HEALTHY and health.secondary.health is FeedHealth.HEALTHY),
             oracle_healthy=bool(health and health.oracle.health is FeedHealth.HEALTHY),
             recovery_ready=bool(self._recovery_result and self._recovery_result.ready),
@@ -1769,12 +1782,9 @@ class BotEngine:
             config={
                 "trade_size_usd": _dec(cfg.trade_size_usd),
                 "daily_loss_limit_usd": _dec(cfg.daily_loss_limit_usd),
-                "max_consecutive_losses": cfg.max_consecutive_losses,
-                "cooldown_minutes": cfg.cooldown_minutes,
                 "max_active_positions": cfg.max_active_positions,
                 "strategy": cfg.strategy,
                 "strategy_mode": cfg.strategy_mode.value,
-                "require_rules_approval": cfg.require_rules_approval,
                 "feature_modes": {k: v.value for k, v in cfg.feature_modes.items()},
             },
         )
@@ -1863,8 +1873,9 @@ class BotEngine:
                 and down_book.depth(Side.SELL) > 0
             )
             protocol_ok = not market.validate() and market.version.value in {"v1", "v2"}
-            rules_verified = str(rule_spec.get("confidence", "LOW")) in {"HIGH", "MEDIUM"} and bool(rule)
-            rules_approved = bool(rule and rule.approved)
+            # Resolution rules are no longer a trading precondition: both rule gate conditions pass.
+            rules_verified = True
+            rules_approved = True
         fused = self._composite
         feeds_healthy = bool(fused and fused.can_enter)
         return GateContext(

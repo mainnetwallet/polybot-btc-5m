@@ -36,11 +36,12 @@ def test_risk_limits_are_immutable():
     with pytest.raises(ValueError):
         RuntimeConfig(daily_loss_limit_usd=Decimal("0"))
     with pytest.raises(HardLimitError):
-        RuntimeConfig(max_active_positions=2)
+        RuntimeConfig(max_active_positions=3)
     with pytest.raises(HardLimitError):
-        RuntimeConfig(max_entries_per_market=2)
+        RuntimeConfig(max_entries_per_market=4)
     with pytest.raises(HardLimitError):
-        RuntimeConfig(max_consecutive_losses=3)
+        RuntimeConfig(max_active_positions=0)
+    RuntimeConfig(max_active_positions=2, max_entries_per_market=3)
     with pytest.raises(HardLimitError):
         RuntimeConfig(max_ack_latency_ms=3001)
 
@@ -50,8 +51,8 @@ def test_defaults_are_conservative():
     assert cfg.mode is Mode.PAPER
     assert cfg.trade_size_usd is None  # no USDC amount set -> the bot does not trade
     assert cfg.daily_loss_limit_usd == Decimal("1")
-    assert cfg.require_rules_approval is True
-    assert cfg.max_active_positions == 1
+    assert cfg.max_active_positions == 2
+    assert cfg.max_entries_per_market == 3
 
 
 def test_config_store_is_atomic_and_validated(tmp_path):
@@ -62,9 +63,9 @@ def test_config_store_is_atomic_and_validated(tmp_path):
     raw = json.loads((tmp_path / "runtime.json").read_text())
     assert raw["min_probability"] == "0.67"
     with pytest.raises(HardLimitError):
-        store.update({"max_consecutive_losses": 5})
+        store.update({"max_active_positions": 5})
     # rejected update leaves the previous file intact
-    assert store.snapshot().max_consecutive_losses == 2
+    assert store.snapshot().max_active_positions == 2
 
 
 def test_fee_formula_and_disabled_fees():

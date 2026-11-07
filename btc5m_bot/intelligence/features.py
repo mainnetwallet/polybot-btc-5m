@@ -9,7 +9,7 @@ from typing import Any
 
 from ..data.series import BtcSeries
 from ..oracle.twap import TwapTracker
-from ..types import OrderBookSnapshot, Side, as_utc
+from ..types import ENTRY_WINDOW_SECONDS, OrderBookSnapshot, Side, as_utc
 
 
 @dataclass
@@ -229,7 +229,7 @@ def compute_features(
         twap_distance_bps=twap_distance_bps,
         projected_final_twap=projected,
         remaining_seconds=max(0.0, (market_end - now).total_seconds()),
-        entry_seconds_remaining=max(0.0, (market_start + timedelta(seconds=120) - now).total_seconds()),
+        entry_seconds_remaining=max(0.0, (market_start + timedelta(seconds=ENTRY_WINDOW_SECONDS) - now).total_seconds()),
         up_book=up_book,
         down_book=down_book,
         up_best_bid=ub["best_bid"],

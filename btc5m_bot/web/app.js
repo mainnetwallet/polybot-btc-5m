@@ -421,7 +421,6 @@ function renderAlert(risk, market) {
     const fix = ["Open risk", "#risk"];
     items.push(["Trading is blocked: " + text(risk.detail || risk.reason), fix]);
   }
-  if (market && market.rules_approved === false) items.push(["This market's resolution rules are not approved yet.", ["Approve rules", "#rules"]]);
   for (const [msg, [label, href]] of items) {
     const row = el("div", "alert-row");
     row.appendChild(el("span", null, msg));
@@ -443,7 +442,6 @@ function renderRisk(risk) {
     ["reserved", risk.reserved],
     ["open positions", risk.open_positions],
     ["consecutive losses", risk.consecutive_losses, Number(risk.consecutive_losses) > 0 ? "warn" : ""],
-    ["cooldown until", risk.cooldown_until, risk.cooldown_until ? "warn" : ""],
     ["day locked", risk.locked ? "YES" : "no", risk.locked ? "down" : ""],
     ["profit locked", risk.profit_locked ? "YES" : "no"],
     ["kill switch", risk.kill_switch ? "ENGAGED" : "off", risk.kill_switch ? "down" : "up"],
@@ -1031,9 +1029,8 @@ function fillSettingsForm(c) {
   $("cfg-sl").value = c.stop_loss_roi;
   $("cfg-edge").value = c.min_net_edge;
   $("cfg-spread").value = c.max_spread;
-  $("cfg-maxloss").value = c.max_consecutive_losses;
-  $("cfg-cooldown").value = c.cooldown_minutes;
-  $("cfg-rules").checked = !!c.require_rules_approval;
+  $("cfg-maxpos").value = c.max_active_positions;
+  $("cfg-maxentries").value = c.max_entries_per_market;
 }
 
 /* Warn in plain words when the Trade size can never produce an order (it buys fewer shares than the
@@ -1083,8 +1080,8 @@ $("settings-form").addEventListener("submit", async (event) => {
     ["stop_loss_roi", "cfg-sl", "Stop loss", (v) => v],
     ["min_net_edge", "cfg-edge", "Minimum net edge", (v) => v],
     ["max_spread", "cfg-spread", "Maximum spread", (v) => v],
-    ["max_consecutive_losses", "cfg-maxloss", "Max losses in a row", (v) => v],
-    ["cooldown_minutes", "cfg-cooldown", "Pause after losses", (v) => v],
+    ["max_active_positions", "cfg-maxpos", "Max open positions", (v) => v],
+    ["max_entries_per_market", "cfg-maxentries", "Max entries per market", (v) => v],
   ];
   for (const [key, id, label, conv] of required) {
     const raw = $(id).value.trim();
@@ -1100,7 +1097,6 @@ $("settings-form").addEventListener("submit", async (event) => {
   }
 
   patch.strategy = $("cfg-strategy").value;
-  patch.require_rules_approval = $("cfg-rules").checked;
 
   try {
     const r = await post("/api/config", { patch });

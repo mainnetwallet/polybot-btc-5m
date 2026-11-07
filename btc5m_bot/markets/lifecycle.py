@@ -1,11 +1,11 @@
-"""Persistent market lifecycle with a hard 120-second entry cutoff."""
+"""Persistent market lifecycle with a fixed 150-second entry cutoff."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
 
-from ..types import MarketInfo, MarketState, as_utc
+from ..types import ENTRY_WINDOW_SECONDS, MarketInfo, MarketState, as_utc
 
 _RANK = {
     MarketState.DISCOVERED: 0,
@@ -40,8 +40,8 @@ class MarketStateMachine:
 
     @property
     def entry_deadline(self) -> datetime:
-        # Immutable 120-second window regardless of user config.
-        return self.start + timedelta(seconds=120)
+        # Fixed entry window regardless of user config.
+        return self.start + timedelta(seconds=ENTRY_WINDOW_SECONDS)
 
     def expected_state(self, now: datetime) -> MarketState:
         now = as_utc(now)

@@ -139,7 +139,8 @@ def test_paper_iteration_discovers_and_fails_closed(settings, repo, adapter, con
     assert adapter.heartbeat_ids == []
     assert engine._last_decision is not None
     assert engine._last_decision["decision"] == "NO_TRADE"
-    assert engine._last_decision["reason"] == ReasonCode.RULES_UNAPPROVED.value
+    # No rule approval step any more: the bot goes straight to the normal checks (here: no data yet).
+    assert engine._last_decision["reason"] == ReasonCode.LOW_PROBABILITY.value
     assert repo.get_window(market.market_id) is not None
 
 
@@ -311,11 +312,31 @@ def test_trading_switch_defaults_off_and_blocks_new_entries(settings, repo, adap
 
 def test_trading_switch_on_lets_the_normal_checks_run(settings, repo, adapter, config_store):
     clock = FixedClock(START)
-    engine, _, _ = _build(settings, repo, adapter, config_store, clock)  # switch ON, rule unapproved
+    engine, _, _ = _build(settings, repo, adapter, config_store, clock)  # switch ON
 
     asyncio.run(engine._iteration())
 
-    assert engine._last_decision["reason"] == ReasonCode.RULES_UNAPPROVED.value  # not TRADING_OFF
+    assert engine._last_decision["reason"] == ReasonCode.LOW_PROBABILITY.value  # not TRADING_OFF, not a rule gate
+
+
+def test_manage_position_visits_every_open_position(settings, repo, adapter, config_store):
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    for market_id in ("mkt-a", "mkt-b"):
+        repo.create_position(
+            market_id=market_id, condition_id=market.condition_id,
+            asset_id=market.asset_id(Outcome.UP), outcome=Outcome.UP.value,
+            shares=Decimal("5"), avg_price=Decimal("0.5"), entry_fee=Decimal(0), mode="PAPER",
+        )
+    seen: list[str] = []
+
+    async def fake_manage(now, position):
+        seen.append(position.market_id)
+
+    engine._manage_one_position = fake_manage
+    asyncio.run(engine._manage_position(START))
+
+    assert sorted(seen) == ["mkt-a", "mkt-b"]
 
 
 def test_trading_switch_fresh_config_is_off(config_store):
@@ -324,8 +345,7 @@ def test_trading_switch_fresh_config_is_off(config_store):
     assert RuntimeConfig().trading_enabled is False
 
 
-def test_auto_approve_rules_setting_approves_in_paper(settings, repo, adapter, config_store):
-    config_store.update({"auto_approve_rules": True})
+def test_rules_are_approved_automatically_in_paper(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, _, spec = _build(settings, repo, adapter, config_store, clock)
 
@@ -333,11 +353,10 @@ def test_auto_approve_rules_setting_approves_in_paper(settings, repo, adapter, c
 
     rule = repo.get_resolution_rule(spec.fingerprint)
     assert rule is not None and rule.approved
-    assert rule.approved_by == "env-auto-approve"
+    assert rule.approved_by == "auto-approve"
 
 
-def test_auto_approve_rules_setting_never_applies_in_live(settings, repo, adapter, config_store):
-    config_store.update({"auto_approve_rules": True})
+def test_rules_are_approved_automatically_in_live_mode_too(settings, repo, adapter, config_store):
     clock = FixedClock(START)
     engine, _, spec = _build(settings, repo, adapter, config_store, clock)
     config_store.update({"mode": "LIVE"})
@@ -345,7 +364,7 @@ def test_auto_approve_rules_setting_never_applies_in_live(settings, repo, adapte
     asyncio.run(engine._iteration())
 
     rule = repo.get_resolution_rule(spec.fingerprint)
-    assert rule is not None and not rule.approved
+    assert rule is not None and rule.approved  # nothing waits for a manual approval
 
 
 def test_pinned_fingerprint_is_approved_without_auto_flag(settings, repo, adapter, config_store):

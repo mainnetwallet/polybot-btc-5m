@@ -18,7 +18,7 @@ HTML = (WEB / "index.html").read_text(encoding="utf-8")
 JS = (WEB / "app.js").read_text(encoding="utf-8")
 
 BASIC_IDS = ("cfg-tradesize", "cfg-daily", "cfg-strategy", "cfg-prob", "cfg-tp", "cfg-sl")
-ADVANCED_IDS = ("cfg-edge", "cfg-spread", "cfg-maxloss", "cfg-cooldown", "cfg-rules")
+ADVANCED_IDS = ("cfg-edge", "cfg-spread", "cfg-maxpos", "cfg-maxentries")
 REMOVED = (
     "entry_window_seconds", "dynamic_tp_max_multiple",
     "capital_usd", "capital_from_balance", "risk_per_trade_pct", "daily_profit_lock_pct",

@@ -37,8 +37,8 @@ def test_every_dashboard_writable_field_round_trips_through_the_database(tmp_pat
         "trade_size_usd": "2",
         "daily_loss_limit_usd": "3",
         "daily_profit_lock_usd": "5",
-        "max_consecutive_losses": 1,
-        "cooldown_minutes": 30,
+        "max_active_positions": 1,
+        "max_entries_per_market": 2,
         "min_probability": "0.7",
         "min_net_edge": "0.06",
         "max_spread": "0.02",
@@ -55,7 +55,6 @@ def test_every_dashboard_writable_field_round_trips_through_the_database(tmp_pat
         "liquidity_exit_spread_multiple": "3",
         "time_exit_seconds_before_end": 40,
         "min_oracle_coverage_seconds": 70,
-        "require_rules_approval": False,
         "strategy": "breakout",
         "strategy_mode": "SHADOW",
         "feature_modes": {"trailing_stop": "ACTIVE"},
@@ -65,7 +64,6 @@ def test_every_dashboard_writable_field_round_trips_through_the_database(tmp_pat
         "max_latency_p95_ms": 1500,
         "taker_delay_ms": 300,
         "fee_buffer": "0.003",
-        "auto_approve_rules": False,
         "min_order_notional_usd": "1.5",
     }
     assert set(patch) >= CONFIG_WRITABLE, f"test does not cover: {sorted(CONFIG_WRITABLE - set(patch))}"

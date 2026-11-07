@@ -64,8 +64,8 @@ the proxy answers 502 `dashboard_unavailable`.
 
 Use `/healthz` for Render's `healthCheckPath` (Render may restart a service whose health check
 keeps failing, and a trading bot should only restart on purpose) and `/health` for UptimeRobot.
-`/health` reports **outages**. A bot that is up but deliberately not trading (`NO TRADE`: unapproved
-rule, a too-small trade size, unhealthy feeds) still returns 200; read those in the **Decisions** tab or
+`/health` reports **outages**. A bot that is up but deliberately not trading (`NO TRADE`: a too-small
+trade size, unhealthy feeds) still returns 200; read those in the **Decisions** tab or
 with `status`.
 
 A leftover `data\STOP` file from a previous run is removed when the supervisor starts (after it
@@ -95,13 +95,12 @@ if one is missing):
 | `RECOVERY_NOT_READY` | startup reconciliation has not passed |
 | `FEED_UNHEALTHY` | BTC feed or Chainlink TWAP health is not fully healthy |
 | `STALE_DATA` / `STALE_BOOK` | data/book exceeds age limits |
-| `RULES_UNVERIFIED` | rule not registered, methodology unknown, or confidence too low |
-| `RULES_UNAPPROVED` | rule fingerprint awaits operator approval |
+| `RULES_UNVERIFIED`, `RULES_UNAPPROVED` | no longer emitted: resolution rules are approved automatically and never block a trade |
 | `MARKET_NOT_ACTIVE` | the market has not started yet, so no entry is possible |
 | `MARKET_NOT_VALIDATED` | market metadata is missing (for an open position: exit management is skipped until it is back) |
-| `ENTRY_WINDOW_CLOSED` | past the hard 120-second entry cutoff |
-| `ENTRY_ALREADY_USED` | this market already had its one entry |
-| `ACTIVE_POSITION` | a position is already open (one at a time) |
+| `ENTRY_WINDOW_CLOSED` | past the 150-second entry cutoff |
+| `ENTRY_ALREADY_USED` | the market's entry cap (3) is used, or a further entry was refused: it must be the same side as the held position and only while that position is in profit |
+| `ACTIVE_POSITION` | the maximum number of open positions (2) is already reached |
 | `ORACLE_DATA_INSUFFICIENT` | features or probability could not be computed (not enough oracle/BTC data) |
 | `NO_SIGNAL` | the strategy produced no directional signal |
 | `LOW_PROBABILITY` | model probability below threshold or not confident enough |
@@ -123,8 +122,7 @@ if one is missing):
 | `ACK_OUTSIDE_WINDOW` | too little time left to verify an order acknowledgement inside the entry window |
 | `NO_FILL` | the entry order was submitted but did not fill |
 | `SELL_NOT_FEASIBLE` | the position could not be exited with sufficient depth |
-| `COOLDOWN` | after `max_consecutive_losses` consecutive losses |
-| `CONSECUTIVE_LOSS_LIMIT` | the consecutive-loss limit is reached |
+| `COOLDOWN`, `CONSECUTIVE_LOSS_LIMIT` | no longer emitted: the loss-streak cooldown was removed |
 | `DAILY_LOSS_LIMIT`, `PROFIT_LOCK`, `KILL_SWITCH` | protective stops |
 | `DUPLICATE_ORDER` | an order with the same idempotency key already exists. A failed exit is retried under a new attempt number; a dropped exit is logged as the `EXIT_DUPLICATE_ORDER` protection event |
 | `SYSTEM_BLOCKED` | reserved: defined, not emitted by the current engine |
@@ -143,12 +141,8 @@ if one is missing):
    `UNVERIFIED`, feed health blocks entries, and the bot records NO TRADE while still
    collecting public BTC/book data.
 2. Let discovery run. The bot stores live Gamma/CLOB market metadata and a rule
-   fingerprint. Unknown or ambiguous methodologies stay blocked.
-3. Review the rule text in the dashboard **Rules** view. Approve only what you verified
-   against the live market metadata:
-   ```bat
-   .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
-   ```
+   fingerprint. Rules are approved automatically; they never block a trade.
+3. (Optional) Read the rule text in the dashboard **Rules** view to see what each market resolves on.
 4. Set `trade_size_usd` (USDC per buy, minimum $1) in the dashboard or `config\runtime.json`. It has no
    default: until it is set the bot places no trades (`TRADE_SIZE_NOT_SET`). The daily loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
 5. Do not judge the strategy from a handful of trades. The statistical validation gate
@@ -157,21 +151,20 @@ if one is missing):
 ## Configuration changes
 
 Only allowlisted fields are writable through `POST /api/config`. Hard limits, position
-count, entries per market, entry window above 120 seconds, and acknowledgement latency
+count above 2, entries per market above 3, and acknowledgement latency
 above 3000 ms raise `HardLimitError`. Feature flags cannot disable risk protections.
 
 Changing mode to LIVE in `runtime.json` is not enough to trade live. See
 `docs/SECURITY.md` and `gate.py`.
 
-## Kill switch and cooldown
+## Kill switch and daily loss limit
 
 - Dashboard **KILL** requires the typed phrase `KILL`; entries stop immediately.
-- **CLEAR KILL** requires `CLEAR KILL`. Clearing a kill does not erase a cooldown or the
-  consecutive-loss count.
-- Two consecutive losses trigger a 15-minute cooldown. Entry resumes only after the
-  cooldown and when all other gates pass.
+- **CLEAR KILL** requires `CLEAR KILL`. Clearing a kill does not erase the consecutive-loss count.
+- There is no loss-streak cooldown: losses in a row never pause the bot. The daily loss limit
+  (`daily_loss_limit_usd`) is the loss guard and locks trading for the day once reached.
 - **RESET DAY** requires `RESET DAY`; it resets the daily P&L window but preserves the
-  kill switch and cooldown.
+  kill switch.
 
 ## Backup and restore
 
@@ -280,7 +273,7 @@ support tickets or chats.
 3. CLOB credentials verified; no VPN/proxy; live geo check returns eligible.
 4. Correct signature type and funder address.
 5. Trade size set; balance and allowance cover at least one trade.
-6. At least one verified rule fingerprint approved.
+6. (Rule approval is automatic; nothing to do.)
 7. Resolution simulator, exposure monitor, risk manager, and backups active.
 8. Heartbeat configured with `POLYBOT_HEARTBEAT_DEDICATED_KEY_CONFIRMED=true` and the
    one-way arm test explicitly recorded.

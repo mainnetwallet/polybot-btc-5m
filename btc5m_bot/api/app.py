@@ -34,8 +34,8 @@ CONFIG_WRITABLE = {
     "trade_size_usd",
     "daily_loss_limit_usd",
     "daily_profit_lock_usd",
-    "max_consecutive_losses",
-    "cooldown_minutes",
+    "max_active_positions",
+    "max_entries_per_market",
     "min_probability",
     "min_net_edge",
     "max_spread",
@@ -52,7 +52,6 @@ CONFIG_WRITABLE = {
     "liquidity_exit_spread_multiple",
     "time_exit_seconds_before_end",
     "min_oracle_coverage_seconds",
-    "require_rules_approval",
     "strategy",
     "strategy_mode",
     "feature_modes",
@@ -62,7 +61,6 @@ CONFIG_WRITABLE = {
     "max_latency_p95_ms",
     "taker_delay_ms",
     "fee_buffer",
-    "auto_approve_rules",
     "min_order_notional_usd",
 }
 

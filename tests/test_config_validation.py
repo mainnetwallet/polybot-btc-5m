@@ -14,9 +14,6 @@ from btc5m_bot.config import RuntimeConfig
 ROOT = Path(__file__).resolve().parents[1]
 
 BAD_VALUES = [
-    ("cooldown_minutes", 0),
-    ("cooldown_minutes", -5),
-    ("cooldown_minutes", 1441),
     ("trailing_stop_pct", "0"),
     ("trailing_stop_pct", "-0.1"),
     ("trailing_stop_pct", "1"),
@@ -57,8 +54,10 @@ def test_out_of_range_tunables_are_rejected(field, value):
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("cooldown_minutes", 1),
-        ("cooldown_minutes", 1440),
+        ("max_active_positions", 1),
+        ("max_active_positions", 2),
+        ("max_entries_per_market", 1),
+        ("max_entries_per_market", 3),
         ("trailing_stop_pct", "0.5"),
         ("min_depth_multiple", "1"),
         ("min_hold_seconds_before_reversal", 0),
@@ -73,16 +72,39 @@ def test_sane_boundary_values_are_accepted(field, value):
     RuntimeConfig.model_validate({field: value})
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("max_active_positions", 0),
+    ("max_active_positions", 3),
+    ("max_entries_per_market", 0),
+    ("max_entries_per_market", 4),
+])
+def test_position_and_entry_caps_are_hard_limits(field, value):
+    from btc5m_bot.config import HardLimitError
+
+    with pytest.raises(HardLimitError):
+        RuntimeConfig.model_validate({field: value})
+
+
 def test_defaults_are_valid():
     cfg = RuntimeConfig()
-    assert cfg.cooldown_minutes >= 1
+    assert (cfg.max_active_positions, cfg.max_entries_per_market) == (2, 3)
 
 
 def test_config_example_json_validates_and_is_complete():
     raw = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
     cfg = RuntimeConfig.model_validate(raw)
-    assert "auto_approve_rules" in raw
-    assert cfg.auto_approve_rules == raw["auto_approve_rules"]
+    # Removed settings must not linger in the example file.
+    for gone in ("max_consecutive_losses", "cooldown_minutes", "require_rules_approval", "auto_approve_rules"):
+        assert gone not in raw
+    assert cfg.max_active_positions == raw["max_active_positions"]
+    assert cfg.max_entries_per_market == raw["max_entries_per_market"]
+
+
+def test_removed_settings_in_old_config_files_are_ignored():
+    cfg = RuntimeConfig.model_validate(
+        {"max_consecutive_losses": 2, "cooldown_minutes": 15, "require_rules_approval": True, "auto_approve_rules": True}
+    )
+    assert not hasattr(cfg, "cooldown_minutes")
 
 
 def test_every_writable_key_is_a_real_field():
@@ -98,7 +120,7 @@ NOT_ON_SETTINGS_PAGE = {
     "min_hold_seconds_before_reversal", "liquidity_exit_depth_drop_pct", "liquidity_exit_spread_multiple",
     "time_exit_seconds_before_end", "min_oracle_coverage_seconds", "strategy_mode", "feature_modes",
     "max_data_age_ms", "max_book_age_ms", "max_ack_latency_ms", "max_latency_p95_ms", "taker_delay_ms",
-    "fee_buffer", "auto_approve_rules", "min_order_notional_usd",
+    "fee_buffer", "min_order_notional_usd",
 }
 
 

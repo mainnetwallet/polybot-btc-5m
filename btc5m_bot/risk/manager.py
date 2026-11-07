@@ -1,13 +1,14 @@
 """Risk manager: the absolute authority for every entry and protection state.
 
-Hard limits are immutable (see config.HardLimitError). This module never raises them
+Hard limits are enforced by config.HardLimitError. This module never raises them
 to satisfy exchange minimums and never treats a planned stop-loss as a reason to risk
-more: the planned loss is assumed to be a full loss of the order cost.
+more: the planned loss is assumed to be a full loss of the order cost. There is no
+loss-streak cooldown: the daily loss limit (a fixed USDC amount) is the loss guard.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Callable
 
@@ -79,21 +80,8 @@ class RiskManager:
         return as_utc(now).astimezone(timezone.utc).date()
 
     # ------------------------------------------------------------------ status
-    def _sync_cooldown(self, now: datetime) -> None:
-        state = self.repo.get_risk_state()
-        if state.cooldown_until is not None and as_utc(now) >= as_utc(state.cooldown_until):
-            # Cooldown served: allow one fresh probe. A loss immediately re-arms it.
-            self.repo.update_risk_state(consecutive_losses=0, cooldown_until=None)
-            self.repo.add_protection_event(
-                "COOLDOWN_ENDED", "INFO", consecutive_losses_reset=0, at=as_utc(now).isoformat()
-            )
-
     def status(self, mode: Mode, *, balance: Decimal | None = None, now: datetime | None = None) -> RiskStatus:
         now = as_utc(now or self.clock.now())
-        # The engine gates entries on status().allowed *before* pre_trade_check ever runs, so an
-        # expired cooldown has to be served here too. Without it the stale loss streak keeps
-        # status() on CONSECUTIVE_LOSS_LIMIT forever and the bot can never trade again.
-        self._sync_cooldown(now)
         cfg = self._cfg()
         day = self.repo.get_risk_day(self._today(now))
         state = self.repo.get_risk_state()
@@ -109,12 +97,6 @@ class RiskManager:
             reason, detail = ReasonCode.PROFIT_LOCK, "daily profit lock reached"
         elif day.locked:
             reason, detail = ReasonCode.DAILY_LOSS_LIMIT, "daily loss limit reached"
-        elif state.cooldown_until is not None and now < as_utc(state.cooldown_until):
-            reason, detail = ReasonCode.COOLDOWN, f"cooling down until {as_utc(state.cooldown_until).isoformat()}"
-        elif state.consecutive_losses >= cfg.max_consecutive_losses:
-            reason, detail = ReasonCode.CONSECUTIVE_LOSS_LIMIT, "consecutive-loss limit reached"
-        elif summary.open_positions >= cfg.max_active_positions:
-            reason, detail = ReasonCode.ACTIVE_POSITION, "an active position already exists"
         elif summary.open_orders > 0:
             reason, detail = ReasonCode.RISK_LIMIT, "unresolved working order exists"
 
@@ -151,7 +133,6 @@ class RiskManager:
         now: datetime | None = None,
     ) -> tuple[bool, ReasonCode, str]:
         now = as_utc(now or self.clock.now())
-        self._sync_cooldown(now)
         cfg = self._cfg()
         state = self.repo.get_risk_state()
         if state.kill_switch:
@@ -167,17 +148,16 @@ class RiskManager:
         if day.realized_pnl <= -limit:
             self._lock_day(day.trading_day, "DAILY_LOSS_LIMIT", {"realized_pnl": str(day.realized_pnl), "limit": str(limit)})
             return False, ReasonCode.DAILY_LOSS_LIMIT, f"daily loss {day.realized_pnl} reached limit {-limit}"
-        if state.cooldown_until is not None and now < as_utc(state.cooldown_until):
-            return False, ReasonCode.COOLDOWN, f"cooling down until {as_utc(state.cooldown_until).isoformat()}"
-        if state.consecutive_losses >= cfg.max_consecutive_losses:
-            self._start_cooldown(now, state.consecutive_losses, "consecutive-loss guard")
-            return False, ReasonCode.CONSECUTIVE_LOSS_LIMIT, "consecutive-loss limit reached"
-        if self.ledger.has_active_position(mode.value):
-            return False, ReasonCode.ACTIVE_POSITION, "one active position maximum"
+        # A top-up of the position already held in this market does not open a new position, so only
+        # an entry into a market without a position counts against max_active_positions.
+        open_positions = self.ledger.open_positions(mode.value)
+        holds_this_market = any(p.market_id == market_id for p in open_positions)
+        if not holds_this_market and len(open_positions) >= cfg.max_active_positions:
+            return False, ReasonCode.ACTIVE_POSITION, f"{cfg.max_active_positions} active position(s) maximum"
         if self.ledger.entries_used(market_id, mode.value) >= cfg.max_entries_per_market:
-            return False, ReasonCode.ENTRY_ALREADY_USED, "one entry per market"
+            return False, ReasonCode.ENTRY_ALREADY_USED, f"{cfg.max_entries_per_market} entries per market maximum"
         if entries_used is not None and entries_used >= cfg.max_entries_per_market:
-            return False, ReasonCode.ENTRY_ALREADY_USED, "one entry per market"
+            return False, ReasonCode.ENTRY_ALREADY_USED, f"{cfg.max_entries_per_market} entries per market maximum"
 
         if planned_loss <= 0:
             return False, ReasonCode.RISK_LIMIT, "planned loss must be positive"
@@ -219,7 +199,7 @@ class RiskManager:
         day_pnl = day.realized_pnl + realized_pnl
         trades, wins, losses = day.trades, day.wins, day.losses
         consecutive = state.consecutive_losses
-        cooldown_until = state.cooldown_until
+        cooldown_until = None  # no loss-streak cooldown any more; the streak is a statistic only
         if position_closed:
             outcome_pnl = realized_pnl if position_pnl is None else position_pnl
             trades += 1
@@ -229,16 +209,6 @@ class RiskManager:
             elif outcome_pnl < 0:
                 losses += 1
                 consecutive += 1
-                if consecutive >= cfg.max_consecutive_losses:
-                    cooldown_until = now + timedelta(minutes=cfg.cooldown_minutes)
-                    events.append("CONSECUTIVE_LOSS_LIMIT")
-                    self.repo.add_protection_event(
-                        "CONSECUTIVE_LOSS_LIMIT",
-                        "WARN",
-                        market_id=market_id,
-                        consecutive_losses=consecutive,
-                        cooldown_until=cooldown_until.isoformat(),
-                    )
 
         locked = day.locked
         profit_locked = day.profit_lock_triggered
@@ -293,27 +263,19 @@ class RiskManager:
         self.repo.update_risk_day(day, locked=True)
         self.repo.add_protection_event(event, "CRITICAL", **detail)
 
-    def _start_cooldown(self, now: datetime, consecutive: int, reason: str) -> None:
-        cfg = self._cfg()
-        until = now + timedelta(minutes=cfg.cooldown_minutes)
-        self.repo.update_risk_state(cooldown_until=until)
-        self.repo.add_protection_event(
-            "COOLDOWN_STARTED", "WARN", reason=reason, consecutive_losses=consecutive, until=until.isoformat()
-        )
-
     def engage_kill_switch(self, reason: str, *, actor: str = "system", detail: dict | None = None) -> None:
         self.repo.update_risk_state(kill_switch=True, kill_reason=reason)
         self.repo.add_protection_event("KILL_SWITCH", "CRITICAL", reason=reason, **(detail or {}))
         self.repo.audit("KILL_SWITCH_ENGAGED", actor=actor, detail={"reason": reason, **(detail or {})})
 
     def clear_kill_switch(self, *, actor: str, reason: str) -> None:
-        # Clearing the kill switch never clears a losing day or cooldown.
+        # Clearing the kill switch never clears a losing day.
         self.repo.update_risk_state(kill_switch=False, kill_reason="")
         self.repo.add_protection_event("KILL_SWITCH_CLEARED", "WARN", actor=actor, reason=reason)
         self.repo.audit("KILL_SWITCH_CLEARED", actor=actor, detail={"reason": reason})
 
     def reset_day_lock(self, *, actor: str, reason: str) -> dict:
-        """Explicit, audited override for a daily lock. Never touches cooldown or kill switch.
+        """Explicit, audited override for a daily lock. Never touches the kill switch.
 
         Returns ``will_relock``: a daily-LOSS lock is re-derived from realized P&L on the next
         entry check, so clearing the flag alone does not resume trading while the day's P&L is

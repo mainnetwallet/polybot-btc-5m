@@ -149,7 +149,39 @@ class ExecutionEngine:
                 )
                 position = self.repo.get_position(market.market_id, mode.value)
             else:
-                position = existing
+                # A later entry in the same market tops the position up (the engine only allows this
+                # for the same outcome and while the position is in profit). Shares, average price,
+                # entry fee and cost basis are merged so P&L and exits see one position.
+                still_open = existing.status in {"OPEN", "DUST"} and existing.shares > 0
+                base_shares = existing.shares if still_open else Decimal(0)
+                base_cost = existing.cost_basis if still_open else Decimal(0)
+                base_fee = existing.entry_fee if still_open else Decimal(0)
+                new_shares = base_shares + result.filled_shares
+                new_cost = base_cost + result.filled_shares * result.avg_price + result.fee_usd
+                fields: dict = dict(
+                    shares=new_shares,
+                    avg_price=(base_shares * existing.avg_price + result.filled_shares * result.avg_price) / new_shares
+                    if still_open
+                    else result.avg_price,
+                    entry_fee=base_fee + result.fee_usd,
+                    cost_basis=new_cost,
+                )
+                if not still_open:
+                    # Defensive: a fill on a market whose position row is closed must never be lost.
+                    fields.update(status="OPEN", closed_at=None, asset_id=intent.asset_id, outcome=intent.outcome.value)
+                self.repo.update_position(existing.id, **fields)
+                self.repo.add_trade(
+                    market_id=market.market_id,
+                    client_order_id=intent.client_order_id,
+                    side=intent.side.value,
+                    outcome=intent.outcome.value,
+                    price=result.avg_price,
+                    shares=result.filled_shares,
+                    fee=result.fee_usd,
+                    kind="ENTRY_ADD",
+                    mode=mode.value,
+                )
+                position = self.repo.get_position(market.market_id, mode.value)
             if mode is Mode.PAPER and result.status is OrderStatus.PARTIAL:
                 # Paper partial is terminal for this attempt; never top up.
                 self.repo.release_reservation(intent.client_order_id, status="RELEASED")
