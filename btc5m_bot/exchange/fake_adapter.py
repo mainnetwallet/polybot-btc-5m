@@ -103,7 +103,24 @@ class FakeExchangeAdapter(ExchangeAdapter):
                 error_code="NO_BOOK",
                 error_message="no book",
             )
-        wanted = intent.shares * self.partial_fill_ratio
+        target_shares = intent.shares
+        if intent.side is Side.BUY:
+            if intent.usdc_amount is None or intent.usdc_amount <= 0:
+                return OrderResult(
+                    client_order_id=intent.client_order_id,
+                    status=OrderStatus.REJECTED,
+                    error_code="NO_USDC_AMOUNT",
+                    error_message="BUY requires a USDC amount",
+                )
+            # BUYs are USDC orders: the shares are whatever the amount buys at the asks.
+            target_shares, remaining = Decimal(0), intent.usdc_amount
+            for level in book.asks:
+                if remaining <= 0:
+                    break
+                take = min(level.size, remaining / level.price) if level.price > 0 else Decimal(0)
+                target_shares += take
+                remaining -= take * level.price
+        wanted = target_shares * self.partial_fill_ratio
         avg, filled = book.avg_exec_price(intent.side, wanted)
         if filled <= 0:
             return OrderResult(
@@ -135,7 +152,7 @@ class FakeExchangeAdapter(ExchangeAdapter):
         self.open_orders.pop(order_id, None)
         return OrderResult(
             client_order_id=intent.client_order_id,
-            status=OrderStatus.FILLED if filled >= intent.shares else OrderStatus.PARTIAL,
+            status=OrderStatus.FILLED if filled >= target_shares else OrderStatus.PARTIAL,
             exchange_order_id=order_id,
             filled_shares=filled,
             avg_price=avg,

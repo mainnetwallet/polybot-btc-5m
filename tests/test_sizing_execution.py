@@ -19,74 +19,78 @@ from conftest import make_book, make_market
 SCHEDULE = FeeSchedule(rate=Decimal("0.07"), exponent=1, enabled=True)
 
 
-def test_sizing_buys_the_requested_trade_size():
-    book = make_book("up", bid="0.49", ask="0.50", ask_size="10000")
-    result = size_position(
-        trade_size_usd=Decimal("10"), balance=Decimal("1000"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
+def _size(target, *, book=None, balance="1000", min_notional="1.00", **kw):
+    return size_position(
+        trade_size_usd=None if target is None else Decimal(target), balance=Decimal(balance),
+        book=book or make_book("up", bid="0.49", ask="0.50", ask_size="10000"),
+        schedule=SCHEDULE, min_notional_usd=Decimal(min_notional), **kw,
     )
-    assert result.allowed
+
+
+def test_sizing_buys_exactly_the_usdc_amount():
+    result = _size("10")
+    assert result.allowed, result.detail
     assert Decimal("10") <= result.notional <= Decimal("10.01")
+    assert result.shares == Decimal("20")  # $10 at 0.50: shares are whatever the amount buys
     assert result.order_cost == result.worst_case_loss
-    assert result.shares >= Decimal("5")
 
 
-def test_sizing_never_raises_size_for_exchange_minimum():
-    # $1 at 0.50 buys 2 shares: below the 5-share venue minimum, so refuse rather than size up.
-    book = make_book("up", ask="0.50")
-    result = size_position(
-        trade_size_usd=Decimal("1"), balance=Decimal("20"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-    )
+def test_unset_trade_size_means_no_trade():
+    for missing in (None, "0"):
+        result = _size(missing)
+        assert not result.allowed
+        assert result.reason is ReasonCode.TRADE_SIZE_NOT_SET
+        assert result.shares == 0
+
+
+def test_one_dollar_buys_fractional_shares_with_no_share_minimum():
+    # $1 at 0.62 is 1.6129 shares, far below the old 5-share floor, and that is fine.
+    result = _size("1", book=make_book("up", ask="0.62", ask_size="10000"))
+    assert result.allowed, result.detail
+    assert result.shares == Decimal("1.6129")
+    assert Decimal("1") <= result.notional <= Decimal("1.001")
+
+
+def test_below_dollar_minimum_is_refused_never_upsized():
+    result = _size("0.50")
     assert not result.allowed
     assert result.reason is ReasonCode.BELOW_MIN_ORDER
     assert result.shares == 0
-    assert "below" in result.detail
 
 
-def test_sizing_respects_available_balance_and_depth():
-    book = make_book("up", ask="0.50", ask_size="8")
-    balance_limited = size_position(
-        trade_size_usd=Decimal("3"), balance=Decimal("2"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-    )
-    assert not balance_limited.allowed
-    assert balance_limited.reason is ReasonCode.INSUFFICIENT_BALANCE
-    depth_limited = size_position(  # $5 at 0.50 needs 10 shares but only 8 are on the ask
-        trade_size_usd=Decimal("5"), balance=Decimal("1000"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-    )
-    assert not depth_limited.allowed
-    assert depth_limited.reason is ReasonCode.INSUFFICIENT_DEPTH
-    depth_ok = size_position(
-        trade_size_usd=Decimal("3"), balance=Decimal("1000"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-    )
-    assert depth_ok.allowed
-    assert depth_ok.shares <= Decimal("8")
+def test_sizing_needs_depth_for_the_full_amount():
+    result = _size("20", book=make_book("up", ask="0.50", ask_size="5"))  # only $2.50 on the ask
+    assert not result.allowed
+    assert result.reason is ReasonCode.INSUFFICIENT_DEPTH
+
+
+def test_sizing_needs_enough_balance():
+    result = _size("10", balance="5")
+    assert not result.allowed
+    assert result.reason is ReasonCode.INSUFFICIENT_BALANCE
+
+
+def test_sizing_does_not_depend_on_the_balance_size():
+    small, large = _size("5", balance="300"), _size("5", balance="100000")
+    assert small.allowed and large.allowed and small.notional == large.notional
 
 
 def test_sizing_walks_multiple_levels():
     book = make_book("up", asks=[("0.50", "5"), ("0.51", "50")], bid="0.49")
-    result = size_position(
-        trade_size_usd=Decimal("10"), balance=Decimal("1000"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-    )
+    result = _size("10", book=book)
     assert result.allowed
-    assert result.shares > Decimal("5")
     assert result.avg_price > Decimal("0.50")
     assert Decimal("10") <= result.notional <= Decimal("10.01")
 
 
 def test_sizing_requires_balance_and_book():
     book = make_book("up")
+    assert _size("5", book=book).allowed
     assert size_position(
-        trade_size_usd=Decimal("5"), balance=None,
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
+        trade_size_usd=Decimal("5"), balance=None, book=book, schedule=SCHEDULE,
     ).reason is ReasonCode.INSUFFICIENT_BALANCE
     assert size_position(
-        trade_size_usd=Decimal("5"), balance=Decimal("100"),
-        book=None, min_order_size=Decimal("5"), schedule=SCHEDULE,
+        trade_size_usd=Decimal("5"), balance=Decimal("100"), book=None, schedule=SCHEDULE,
     ).reason is ReasonCode.INSUFFICIENT_DEPTH
 
 
@@ -99,12 +103,10 @@ def test_exit_feasibility_requires_full_route_by_default():
     assert "only 10/100" in thin.reasons[-2] or any("only 10" in r for r in thin.reasons)
 
 
-def test_exit_feasibility_refuses_unverified_subminimum_market_sell():
-    # Do not assume marketable SELLs are exempt from the CLOB share minimum.
+def test_exit_feasibility_has_no_share_minimum():
+    # Exits are market sells of every share held: a 1.37-share position is just as sellable.
     book = make_book("up", bid="0.40", bid_size="4")
-    result = assess_exit_feasibility(book, Decimal("1.37"))
-    assert not result.allowed
-    assert "below the venue minimum" in result.reasons[0]
+    assert assess_exit_feasibility(book, Decimal("1.37")).allowed
     assert assess_exit_feasibility(None, Decimal("10")).allowed is False
 
 
@@ -118,7 +120,7 @@ def test_paper_broker_entry_fill_fees_and_duplicate_guard(clock, repo):
     journal = OrderJournal(repo)
     intent = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"),
-        limit_price=Decimal("0.51"), order_type="FOK", mode="PAPER",
+        limit_price=Decimal("0.51"), order_type="FOK", mode="PAPER", usdc_amount=Decimal("5"),
     )
     result = asyncio.run(broker.place_order(intent, market, book))
     assert result.status is OrderStatus.FILLED
@@ -127,7 +129,7 @@ def test_paper_broker_entry_fill_fees_and_duplicate_guard(clock, repo):
     assert broker.position_for(market.market_id) is not None
     duplicate = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"),
-        limit_price=Decimal("0.51"), order_type="FOK", mode="PAPER",
+        limit_price=Decimal("0.51"), order_type="FOK", mode="PAPER", usdc_amount=Decimal("5"),
     )
     rejected = asyncio.run(broker.place_order(duplicate, market, book))
     assert rejected.status is OrderStatus.REJECTED
@@ -194,6 +196,7 @@ def test_paper_broker_sell_and_settlement(clock):
         client_order_id=uuid.uuid4().hex, idempotency_key=uuid.uuid4().hex,
         market_id=market.market_id, condition_id=market.condition_id, asset_id=up,
         outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"), limit_price=Decimal("0.51"),
+        usdc_amount=Decimal("5"),
     )
     assert asyncio.run(broker.place_order(buy, market, book)).status is OrderStatus.FILLED
     cost = broker.positions[up].cost_basis
@@ -225,14 +228,14 @@ def test_execution_journal_prevents_duplicate_entries(clock, repo, adapter):
     adapter.set_book(market.asset_id(Outcome.UP), bids=[("0.49", "1000")], asks=[("0.50", "1000")])
     intent = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"),
-        limit_price=Decimal("0.51"), mode="LIVE",
+        limit_price=Decimal("0.51"), mode="LIVE", usdc_amount=Decimal("5"),
     )
     first = asyncio.run(engine.execute_entry(intent, market, book))
     assert first.result.status is OrderStatus.FILLED
     assert repo.get_position(market.market_id, "LIVE") is not None
     second = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("10"),
-        limit_price=Decimal("0.51"), mode="LIVE",
+        limit_price=Decimal("0.51"), mode="LIVE", usdc_amount=Decimal("5"),
     )
     duplicate = asyncio.run(engine.execute_entry(second, market, book))
     assert duplicate.result.status is OrderStatus.REJECTED
@@ -249,7 +252,7 @@ def test_unknown_order_requires_recovery(clock, repo, adapter):
     adapter.unknown_place = True
     intent = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("5"),
-        limit_price=Decimal("0.51"), mode="LIVE",
+        limit_price=Decimal("0.51"), mode="LIVE", usdc_amount=Decimal("2.5"),
     )
     outcome = asyncio.run(engine.execute_entry(intent, market, make_book(market.asset_id(Outcome.UP))))
     assert outcome.result.status is OrderStatus.UNKNOWN
@@ -268,82 +271,8 @@ def test_cancel_is_never_assumed(clock, repo, adapter):
     adapter.set_book(market.asset_id(Outcome.UP), bids=[("0.49", "1000")], asks=[("0.50", "1000")])
     intent = journal.new_intent(
         market=market, outcome=Outcome.UP, side=Side.BUY, shares=Decimal("5"),
-        limit_price=Decimal("0.51"), mode="LIVE",
+        limit_price=Decimal("0.51"), mode="LIVE", usdc_amount=Decimal("2.5"),
     )
     asyncio.run(engine.execute_entry(intent, market, book))
     assert asyncio.run(engine.cancel_verified(intent.client_order_id, None)) is False
     assert repo.get_order(intent.client_order_id).status == OrderStatus.UNKNOWN.value
-
-
-def test_dollar_minimum_does_not_replace_venue_share_minimum():
-    # A collateral floor is not evidence of a sub-five-share CLOB exemption: $2 at 0.50 is 4 shares.
-    book = make_book("up", bid="0.49", ask="0.50", ask_size="10000")
-    result = size_position(
-        trade_size_usd=Decimal("2"), balance=Decimal("100"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-        min_notional_usd=Decimal("1.00"),
-    )
-    assert not result.allowed
-    assert result.reason is ReasonCode.BELOW_MIN_ORDER
-    assert result.shares == Decimal(0)
-
-
-def test_dollar_minimum_never_raises_the_trade_size_to_reach_one_dollar():
-    # A $0.40 trade is below the $1 minimum: must refuse, never size up.
-    book = make_book("up", bid="0.49", ask="0.50", ask_size="10000")
-    result = size_position(
-        trade_size_usd=Decimal("0.40"), balance=Decimal("20"),
-        book=book, min_order_size=Decimal("5"), schedule=SCHEDULE,
-        min_notional_usd=Decimal("1.00"),
-    )
-    assert not result.allowed
-    assert result.reason is ReasonCode.BELOW_MIN_ORDER
-    assert result.shares == Decimal(0)
-
-
-# ---- fixed dollar trade size (trade_size_usd) ---------------------------------------------------
-def _fixed(target, *, ask="0.50", ask_size="10000", balance="1000", min_notional="1.00"):
-    return size_position(
-        trade_size_usd=Decimal(target), balance=Decimal(balance),
-        book=make_book("up", ask=ask, ask_size=ask_size), min_order_size=Decimal("5"),
-        schedule=SCHEDULE, min_notional_usd=Decimal(min_notional),
-    )
-
-
-@pytest.mark.parametrize("target", ["3", "5", "10"])
-def test_fixed_size_trades_the_requested_dollar_amount(target):
-    result = _fixed(target)
-    assert result.allowed, result.detail
-    # order value sits at the target, at most one share step (~$0.01) above it
-    assert Decimal(target) <= result.notional <= Decimal(target) + Decimal("0.01")
-
-
-def test_fixed_size_does_not_depend_on_the_balance_size():
-    small = _fixed("5", balance="300")
-    large = _fixed("5", balance="100000")
-    assert small.allowed and large.allowed
-    assert small.notional == large.notional
-
-
-def test_fixed_size_does_not_round_up_to_venue_minimum():
-    below_minimum = _fixed("1")
-    assert not below_minimum.allowed
-    assert below_minimum.reason is ReasonCode.BELOW_MIN_ORDER
-
-
-def test_fixed_size_below_exchange_minimum_is_refused():
-    result = _fixed("0.50")
-    assert not result.allowed
-    assert result.reason is ReasonCode.BELOW_MIN_ORDER
-
-
-def test_fixed_size_never_shrinks_when_book_is_thin():
-    result = _fixed("20", ask_size="5")  # $20 at 0.50 needs 40 shares, only 5 on the ask
-    assert not result.allowed
-    assert result.reason is ReasonCode.INSUFFICIENT_DEPTH
-
-
-def test_fixed_size_needs_enough_balance():
-    result = _fixed("10", balance="5")
-    assert not result.allowed
-    assert result.reason is ReasonCode.INSUFFICIENT_BALANCE

@@ -252,22 +252,23 @@ def test_stop_loss_and_take_profit():
     assert target.action is ExitAction.SELL and target.reason == "TAKE_PROFIT"
 
 
-def test_thin_book_holds_and_never_submits_infeasible_sell():
+def test_thin_book_still_market_sells_everything_held():
+    # Exits are market sells of the whole position: a thin book does not turn the exit into a hold.
     exits = HybridExitManager()
     market = make_market()
     thin = make_book(market.asset_id(Outcome.UP), bid="0.35", bid_size="2")
+    pos = position()
     decision = exits.evaluate(
-        position=position(), market=market, up_book=thin, down_book=None,
+        position=pos, market=market, up_book=thin, down_book=None,
         probability=None, config=config(), now=START,
     )
-    assert decision.action is ExitAction.HOLD
-    assert decision.reason == "SELL_NOT_FEASIBLE"
-    assert decision.shadow_action is ExitAction.SELL
+    assert decision.action is ExitAction.SELL
+    assert decision.shares == pos.shares
+    assert decision.limit_price == market.tick_size
 
 
-def test_subminimum_position_is_not_sent_as_an_invalid_market_sell():
-    # CLOB market orders reuse the same order construction constraints; a position below
-    # the current book minimum cannot be assumed sellable and must not produce a rejected order.
+def test_subminimum_position_is_market_sold_in_full():
+    # No share minimum and no dust rule: a 3-share position is sold whole.
     exits = HybridExitManager()
     market = make_market()
     book = make_book(market.asset_id(Outcome.UP), bid="0.30", bid_size="100")
@@ -275,9 +276,8 @@ def test_subminimum_position_is_not_sent_as_an_invalid_market_sell():
         position=position(shares=Decimal("3"), cost_basis=Decimal("1.5")), market=market,
         up_book=book, down_book=None, probability=None, config=config(), now=START,
     )
-    assert decision.action is ExitAction.HOLD
-    assert decision.reason == "SELL_NOT_FEASIBLE"
-    assert decision.shares == Decimal("0")
+    assert decision.action is ExitAction.SELL
+    assert decision.shares == Decimal("3")
 
 
 def test_no_bid_holds_to_resolution():
@@ -518,44 +518,20 @@ def test_reset_day_lock_after_profit_lock_does_not_relock(clock, repo):
     assert out["will_relock"] is False
 
 
-def test_exit_limit_covers_every_bid_level_needed_for_a_full_exit():
-    # 10 shares, but the top bid only holds 4: feasibility walks three levels, so the SELL limit
-    # must reach the worst level it needs (0.33), not just the best bid (0.35).
+def test_exit_is_a_market_sell_with_no_price_floor_above_the_lowest_tick():
+    # Market sell: the limit never blocks lower bid levels, whatever the depth of the top level.
     exits = HybridExitManager()
     market = make_market()
-    book = make_book(
-        market.asset_id(Outcome.UP),
-        bids=[("0.35", "4"), ("0.34", "4"), ("0.33", "4")],
-    )
-    decision = exits.evaluate(
-        position=position(), market=market, up_book=book, down_book=None,
-        probability=None, config=config(), now=START,
-    )
-    assert decision.action is ExitAction.SELL and decision.reason == "STOP_LOSS"
-    assert decision.limit_price == Decimal("0.33")
-    assert decision.feasibility.worst_price == Decimal("0.33")
-
-
-def test_exit_limit_is_best_bid_when_top_level_is_deep_enough():
-    exits = HybridExitManager()
-    market = make_market()
-    book = make_book(market.asset_id(Outcome.UP), bids=[("0.35", "100"), ("0.30", "100")])
-    decision = exits.evaluate(
-        position=position(), market=market, up_book=book, down_book=None,
-        probability=None, config=config(), now=START,
-    )
-    assert decision.action is ExitAction.SELL
-    assert decision.limit_price == Decimal("0.35")
-
-
-def test_exit_limit_is_floored_to_the_market_tick():
-    exits = HybridExitManager()
-    market = make_market()
-    book = make_book(market.asset_id(Outcome.UP), bids=[("0.35", "5"), ("0.3349", "5")])
-    decision = exits.evaluate(
-        position=position(), market=market, up_book=book, down_book=None,
-        probability=None, config=config(), now=START,
-    )
-    assert decision.action is ExitAction.SELL
-    assert decision.limit_price == Decimal("0.33")
-    assert decision.limit_price % market.tick_size == 0
+    for bids in (
+        [("0.35", "4"), ("0.34", "4"), ("0.33", "4")],
+        [("0.35", "100"), ("0.30", "100")],
+        [("0.35", "5"), ("0.3349", "5")],
+    ):
+        book = make_book(market.asset_id(Outcome.UP), bids=bids)
+        decision = exits.evaluate(
+            position=position(), market=market, up_book=book, down_book=None,
+            probability=None, config=config(), now=START,
+        )
+        assert decision.action is ExitAction.SELL
+        assert decision.shares == Decimal("10")
+        assert decision.limit_price == market.tick_size

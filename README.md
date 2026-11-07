@@ -13,7 +13,7 @@ passes a strict 24-condition gate and types an explicit confirmation phrase.
 
 | Limit | Value |
 |---|---|
-| Order size | Every buy is `trade_size_usd` dollars (default 1, must be > 0). Fees, the available balance and the venue minimum still apply: because the exchange minimum is 5 shares (about $3 at a 0.60 price), set `trade_size_usd` to **about $3 or more**; a smaller size is refused, never rounded up. The Settings page warns when the Trade size cannot work |
+| Order size | Every buy is a USDC market order for exactly `trade_size_usd` dollars; the share count is whatever that buys. **No default: while `trade_size_usd` is unset the bot places no trades** (`TRADE_SIZE_NOT_SET`). The only minimum is `min_order_notional_usd` (default **$1**); a smaller amount is refused (`BELOW_MIN_ORDER`), never rounded up. The Settings page warns when the Trade size cannot work |
 | Daily loss limit | fixed **USDC amount** (`daily_loss_limit_usd`, default 1, must be > 0). Configurable in the dashboard Settings; a lock it triggers cannot be bypassed |
 | Consecutive losses before cooldown | max **2** (hard cap), then a cooldown of `cooldown_minutes` (default 15, allowed 1 to 1440) |
 | Concurrent positions | **1** |
@@ -112,8 +112,9 @@ Edit `config\runtime.json` (or use the dashboard Settings page) and set how many
 "trade_size_usd": 3
 ```
 
-This is the amount of each order. The exchange minimum is 5 shares (about $3 at a 0.60 price), so use about $3
-or more; a smaller size is refused, never rounded up. A fresh PAPER account starts with 100 virtual USDC
+This is the USDC amount of each buy (a market order sized in dollars, never in shares). It has no default:
+until you set it the bot places no trades. The minimum is $1 (`min_order_notional_usd`); a smaller amount is
+refused, never rounded up. A fresh PAPER account starts with 100 virtual USDC
 (`POLYBOT_PAPER_START_BALANCE_USD`).
 
 ### 6. Start the bot
@@ -313,21 +314,24 @@ To operate the bot for real, switch to a paid plan with a disk: in `render.yaml`
    ```
    Approval is recorded with an audit entry. Unknown or ambiguous rules stay blocked.
 3. Configure the trade size in the dashboard or `config\runtime.json`.
-   Every entry buys about `trade_size_usd` dollars (default `1`; `3` → $3, `5` → $5). The order is never
-   increased to satisfy the exchange minimum: the minimum is 5 shares, so one order costs about
-   `5 × price` (≈ $3 at 0.60). A `trade_size_usd` below that can never trade and every attempt shows
-   `BELOW_MIN_ORDER`. The Settings page shows this warning in plain words.
+   Every entry is a USDC market buy of exactly `trade_size_usd` dollars (`1` → $1, `3` → $3). There is no
+   default: **if it is not set, no trade is placed** (`TRADE_SIZE_NOT_SET`). The amount is never increased to
+   reach a minimum; below `min_order_notional_usd` (default $1) every attempt shows `BELOW_MIN_ORDER`.
+   The Settings page shows this warning in plain words.
+   *Note:* the $1 minimum for market orders comes from Polymarket's UI and community reports, not the official
+   API docs (which describe `min_order_size` as shares). If the exchange rejects an order for size, the error
+   is shown in the Activity log and no money is spent.
 
    **Balance:** the order must also fit the available balance (PAPER: virtual cash, LIVE: wallet USDC).
    A fresh PAPER account starts with `POLYBOT_PAPER_START_BALANCE_USD` virtual USDC (default 100).
 
-   **Fixed dollar size (default $1, raise it to at least ≈ $3):** every entry buys about
-   `trade_size_usd` dollars. Change it in `config\runtime.json` or the *Trade size* field under Settings
-   (`3` → $3, `5` → $5). The venue's minimum share quantity, the daily loss limit, the loss-streak guard and
-   the available balance still apply. If the target cannot satisfy them, the bot refuses the entry rather than
-   increasing size.
-   Do not assume a marketable FOK/FAK order is exempt from the CLOB minimum share size; exits
-   below the current book minimum are treated as unverified and blocked.
+   **USDC buy size (no default):** every entry buys `trade_size_usd` dollars. Set it in `config\runtime.json`
+   or the *Trade size* field under Settings. The daily loss limit, the loss-streak guard and the available
+   balance still apply; if the amount cannot satisfy them, the bot refuses the entry rather than changing size.
+
+   **Exits:** whenever an exit rule fires the bot sells **every share it holds** of that side (UP or DOWN) at
+   market (FAK, lowest valid tick as the price floor). Whatever the book cannot absorb is retried on the next
+   cycle. There is no share minimum on exits.
 4. Leave the bot PAPER until you have enough real, recorded outcomes to judge it.
    No performance claim is made here.
 
@@ -417,9 +421,9 @@ acknowledgement window.
 
 - Write-ahead order journal with idempotency keys
 - LIVE settlement redemption waits for a confirmed SDK transaction receipt; ambiguous submissions are quarantined and never blindly retried
-- FOK/FAK book walking with slippage, fees, and partial-fill accounting; minimum share constraints are enforced conservatively
+- USDC-denominated FOK buys; FAK market sells of the whole position; book walking with slippage, fees, and partial-fill accounting
 - Exchange `UNKNOWN` results are never blindly retried
-- Exit feasibility checks the book's minimum share quantity; the bot does not assume an undocumented market-order exemption
+- Before an entry the bids must be able to absorb the position (full exit visible); no share-minimum rule applies to buys or sells
 - Every entry and exit decision is logged with a reason code
 
 ### Data

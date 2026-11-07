@@ -276,15 +276,19 @@ class PolymarketAdapter(ExchangeAdapter):
                     "order_type": intent.order_type.upper(),
                 }
                 if intent.side is Side.BUY:
-                    # CLOB BUY market orders are denominated in collateral, not shares:
-                    # ``shares`` is rejected by the SDK. Offer the maximum notional and
-                    # cap the all-in spend at the planned cost (notional + fee).
-                    # The operator sizes in USDC: send exactly that amount. Without it, fall back
-                    # to the planning estimate (shares x limit price).
-                    notional = intent.usdc_amount if intent.usdc_amount is not None else intent.shares * intent.limit_price
+                    # CLOB BUY market orders are denominated in collateral (USDC), never shares.
+                    # Send exactly the operator's amount and cap the all-in spend at amount + fee.
+                    if intent.usdc_amount is None or intent.usdc_amount <= 0:
+                        return OrderResult(
+                            client_order_id=intent.client_order_id,
+                            status=OrderStatus.REJECTED,
+                            error_code="NO_USDC_AMOUNT",
+                            error_message="BUY requires a USDC amount",
+                            raw_status="rejected",
+                        )
                     kwargs.update(
-                        amount=notional,
-                        max_spend=notional + taker_fee(intent.shares, intent.limit_price, schedule),
+                        amount=intent.usdc_amount,
+                        max_spend=intent.usdc_amount + taker_fee(intent.shares, intent.limit_price, schedule),
                         max_price=intent.limit_price,
                     )
                 else:

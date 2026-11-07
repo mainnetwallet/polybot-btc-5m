@@ -2,8 +2,8 @@
 
 Precedence: emergency -> stop loss -> trailing stop -> take profit -> probability
 reversal -> momentum reversal -> liquidity deterioration -> hold-vs-sell EV ->
-time exit -> hold-to-resolution. Every SELL is checked for full exit feasibility
-first. SELLs are market orders: no minimum share size, no dust rule.
+time exit -> hold-to-resolution. Every exit sells the whole position at market.
+SELLs are market orders: no minimum share size, no dust rule.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .exchange.fees import FeeSchedule, taker_fee
 from .execution.feasibility import ExitFeasibility, assess_exit_feasibility
 from .intelligence.features import FeatureSnapshot
 from .intelligence.probability import ProbabilityEstimate
-from .types import FeatureMode, MarketInfo, OrderBookSnapshot, Outcome, as_utc, floor_to_step, utcnow
+from .types import FeatureMode, MarketInfo, OrderBookSnapshot, Outcome, as_utc, utcnow
 
 
 class ExitAction(str, Enum):
@@ -115,23 +115,20 @@ class HybridExitManager:
         feasibility: ExitFeasibility,
         **kwargs: Any,
     ) -> ExitDecision:
-        if not feasibility.allowed or not feasibility.can_full_exit or book is None or book.best_bid is None:
+        if book is None or book.best_bid is None:
+            # Nothing to sell into. (Any bid at all is enough: the exit is a market sell.)
             return self._hold(
                 "SELL_NOT_FEASIBLE",
-                f"{reason}: full exit unavailable ({'; '.join(feasibility.reasons) or 'no route'})",
+                f"{reason}: no bid liquidity to sell into",
                 priority,
                 feasibility=feasibility,
                 shadow_action=ExitAction.SELL,
                 shadow_reason=reason,
                 **kwargs,
             )
-        # FOK SELL: min_price is the worst price the exchange may fill at. It must reach the deepest
-        # bid level that feasibility counted on, or the lower levels cannot match and the exit fails.
-        # Floor to the tick grid (the SDK rejects off-grid prices); never above the best bid.
-        limit = feasibility.worst_price if feasibility.worst_price is not None else book.best_bid
-        limit = min(floor_to_step(limit, market.tick_size), book.best_bid)
-        if limit <= 0:
-            limit = book.best_bid
+        # MARKET SELL of every share held: no size minimum and no price floor beyond the lowest
+        # valid tick, so the order sweeps the bids (sent as FAK; any unfilled remainder is retried).
+        limit = market.tick_size
         return ExitDecision(
             ExitAction.SELL,
             reason,

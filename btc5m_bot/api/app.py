@@ -93,7 +93,7 @@ def _advice(cfg: RuntimeConfig) -> dict[str, Any]:
     """Tell the operator, in words, when the Trade size cannot ever produce an order."""
     return trade_size_advice(
         trade_size_usd=cfg.trade_size_usd,
-        fee_buffer=cfg.fee_buffer,
+        min_notional_usd=cfg.min_order_notional_usd,
     )
 
 

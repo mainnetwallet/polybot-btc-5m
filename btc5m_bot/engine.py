@@ -890,7 +890,6 @@ class BotEngine:
             balance=self._balance,
             reserved=self.repo.active_reserved_total(),
             book=book,
-            min_order_size=max(market.min_order_size, book.min_order_size),
             schedule=schedule,
             fee_buffer=cfg.fee_buffer,
             max_price=limit_price,
@@ -986,7 +985,7 @@ class BotEngine:
             strategy_version=f"{cfg.strategy}:{cfg.strategy_mode.value}:v1",
             reason=f"{cfg.strategy}|p={p_outcome:.4f}|edge={edge.net_edge}|secondsDelay={seconds_delay}",
             now=now,
-            usdc_amount=cfg.trade_size_usd if cfg.trade_size_usd is not None else sizing.notional,
+            usdc_amount=cfg.trade_size_usd,  # BUYs are always denominated in USDC
         )
         outcome_result = await self.execution.execute_entry(intent, market, book, signal_ts=f.ts)
         result = outcome_result.result
@@ -1108,7 +1107,7 @@ class BotEngine:
             side=Side.SELL,
             shares=decision.shares,
             limit_price=decision.limit_price,
-            order_type="FOK",
+            order_type="FAK",
             mode=self._effective_mode.value,
             reason=decision.reason,
             now=now,
@@ -1839,10 +1838,11 @@ class BotEngine:
         if market is not None:
             up_book, down_book = self._market_books(market)
             if up_book and up_book.best_ask:
-                min_shares = max(market.min_order_size, up_book.min_order_size)
-                # The trade size must be able to buy the venue's minimum share quantity.
-                affordable = min_shares * up_book.best_ask <= cfg.trade_size_usd
-                min_buy = affordable and up_book.depth(Side.BUY) >= min_shares
+                # BUYs are USDC orders: the trade size must be set, reach the dollar minimum, and the
+                # asks must be deep enough to absorb it.
+                affordable = cfg.trade_size_usd is not None and cfg.trade_size_usd >= cfg.min_order_notional_usd
+                needed_shares = (cfg.trade_size_usd or Decimal(0)) / up_book.best_ask
+                min_buy = affordable and up_book.depth(Side.BUY) >= needed_shares
             min_sell = bool(
                 up_book
                 and down_book
@@ -1874,6 +1874,7 @@ class BotEngine:
             allowance_ok=bool(
                 balance is not None
                 and balance.allowance is not None
+                and cfg.trade_size_usd is not None
                 and balance.allowance >= cfg.trade_size_usd
             ),
             reconciliation_clean=recovery_row.state == "READY" and not open_orders,

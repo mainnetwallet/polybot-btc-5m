@@ -18,7 +18,6 @@ from ..types import (
     Side,
     floor_to_step,
 )
-from .feasibility import SHARE_STEP
 
 
 @dataclass
@@ -122,21 +121,6 @@ class PaperBroker:
             value += pos.shares * price
         return value
 
-    def _walk_limit(self, book: OrderBookSnapshot, shares: Decimal, limit: Decimal) -> tuple[Decimal, Decimal]:
-        remaining = shares
-        filled = Decimal(0)
-        notional = Decimal(0)
-        for level in book.asks:
-            if remaining <= 0:
-                break
-            if level.price > limit:
-                continue
-            take = min(level.size, remaining)
-            filled += take
-            notional += take * level.price
-            remaining -= take
-        return filled, notional
-
     def _walk_usdc(self, book: OrderBookSnapshot, usdc: Decimal, limit: Decimal) -> tuple[Decimal, Decimal]:
         """Spend ``usdc`` on the asks (cheapest first, up to ``limit``): returns (shares, notional).
 
@@ -173,28 +157,17 @@ class PaperBroker:
             return OrderResult(intent.client_order_id, OrderStatus.CANCELLED, raw_status="missed_due_to_delay")
 
         if intent.side is Side.BUY:
-            by_usdc = intent.usdc_amount is not None
-            if by_usdc:
-                # USDC-denominated BUY: spend exactly the amount, shares come out of the price.
-                filled, notional = self._walk_usdc(book, intent.usdc_amount, intent.limit_price)
-                short = notional < intent.usdc_amount - Decimal("0.01")
-            else:
-                filled, notional = self._walk_limit(book, intent.shares, intent.limit_price)
-                short = filled < intent.shares
+            if intent.usdc_amount is None or intent.usdc_amount <= 0:
+                return OrderResult(intent.client_order_id, OrderStatus.REJECTED, error_code="NO_USDC_AMOUNT", error_message="BUY requires a USDC amount")
+            # USDC-denominated BUY: spend exactly the amount, shares come out of the price.
+            filled, notional = self._walk_usdc(book, intent.usdc_amount, intent.limit_price)
+            short = notional < intent.usdc_amount - Decimal("0.01")
             if filled <= 0:
                 return OrderResult(intent.client_order_id, OrderStatus.CANCELLED, raw_status="no_depth_at_limit")
             if intent.order_type.upper() == "FOK" and short:
                 return OrderResult(intent.client_order_id, OrderStatus.CANCELLED, raw_status="fok_not_filled")
-            # FOK is all-or-nothing on the real exchange: it can never come back partially filled.
-            # (rng is still drawn first so seeded runs keep the same random sequence.)
-            partial_roll = self.rng.random() < self.partial_probability
-            if partial_roll and intent.order_type.upper() != "FOK" and not by_usdc:
-                fraction = Decimal(str(self.rng.uniform(0.2, 0.9)))
-                target = floor_to_step(filled * fraction, SHARE_STEP)
-                if target > 0:
-                    avg_partial, _ = book.avg_exec_price(Side.BUY, target)
-                    filled = target
-                    notional = avg_partial * filled
+            # (rng is still drawn so seeded runs keep the same random sequence.)
+            self.rng.random()
             avg = notional / filled
             fee = taker_fee(filled, avg, schedule)
             cost = notional + fee
@@ -215,7 +188,7 @@ class PaperBroker:
                 cost_basis=cost,
                 opened_at=self.clock.now(),
             )
-            status = OrderStatus.PARTIAL if short or (not by_usdc and filled < intent.shares) else OrderStatus.FILLED
+            status = OrderStatus.PARTIAL if short else OrderStatus.FILLED
             result = OrderResult(
                 client_order_id=intent.client_order_id,
                 status=status,

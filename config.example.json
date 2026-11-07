@@ -1,6 +1,6 @@
 {
   "mode": "PAPER",
-  "trade_size_usd": 1,
+  "trade_size_usd": null,
   "daily_loss_limit_usd": 1,
   "daily_profit_lock_usd": null,
   "max_consecutive_losses": 2,

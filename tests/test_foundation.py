@@ -48,7 +48,7 @@ def test_risk_limits_are_immutable():
 def test_defaults_are_conservative():
     cfg = RuntimeConfig()
     assert cfg.mode is Mode.PAPER
-    assert cfg.trade_size_usd == Decimal("1")
+    assert cfg.trade_size_usd is None  # no USDC amount set -> the bot does not trade
     assert cfg.daily_loss_limit_usd == Decimal("1")
     assert cfg.require_rules_approval is True
     assert cfg.max_active_positions == 1
@@ -194,7 +194,8 @@ def test_min_order_notional_default_and_validation():
     from btc5m_bot.config import RuntimeConfig
 
     assert RuntimeConfig().min_order_notional_usd == _D("1.00")
-    assert RuntimeConfig(min_order_notional_usd=None).min_order_notional_usd is None
+    # null (old "share minimums" mode) is dropped: BUYs are USDC orders, so the $1 floor stays
+    assert RuntimeConfig(min_order_notional_usd=None).min_order_notional_usd == _D("1.00")
     import pytest as _pytest
     with _pytest.raises(Exception):
         RuntimeConfig(min_order_notional_usd=_D("0"))

@@ -94,13 +94,13 @@ class RuntimeConfig(BaseModel):
     taker_delay_ms: int = 250
     fee_buffer: Decimal = Decimal("0.002")
 
-    # Optional additional collateral-notional floor. The venue's share minimum from market/book
-    # metadata always applies as well; this setting never substitutes for it.
-    min_order_notional_usd: Decimal | None = Decimal("1.00")
+    # Minimum order value in USDC. BUYs are USDC market orders, so this is the only venue minimum
+    # that is applied to them; the share count is whatever the amount buys.
+    min_order_notional_usd: Decimal = Decimal("1.00")
 
-    # Fixed dollar amount spent on every buy, default $1. This is the per-order size: the venue
-    # minimum share quantity, daily loss limit, loss-streak guard and available balance still apply.
-    trade_size_usd: Decimal = Decimal("1")
+    # USDC spent on every buy. No default: while this is unset the bot places NO trades. It is the
+    # per-order size; the daily loss limit, loss-streak guard and available balance still apply.
+    trade_size_usd: Decimal | None = None
 
     # Master trading switch. OFF blocks every NEW entry (TRADING_OFF). Open positions keep being
     # managed and exited. Defaults to OFF so a fresh or restarted deploy never trades until the
@@ -109,16 +109,16 @@ class RuntimeConfig(BaseModel):
 
     @field_validator("min_order_notional_usd")
     @classmethod
-    def _min_notional(cls, v: Decimal | None) -> Decimal | None:
-        if v is not None and v <= 0:
-            raise ValueError("min_order_notional_usd must be positive (or null for share minimums)")
+    def _min_notional(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("min_order_notional_usd must be positive")
         return v
 
     @field_validator("trade_size_usd")
     @classmethod
-    def _trade_size(cls, v: Decimal) -> Decimal:
-        if v <= 0:
-            raise ValueError("trade_size_usd must be positive")
+    def _trade_size(cls, v: Decimal | None) -> Decimal | None:
+        if v is not None and v <= 0:
+            raise ValueError("trade_size_usd must be positive (or null to disable trading)")
         return v
 
     # Settings that existed in older versions but never changed any behaviour (or were replaced).
@@ -150,9 +150,9 @@ class RuntimeConfig(BaseModel):
             return data
         if cls.LEGACY_KEYS & data.keys():
             data = {k: v for k, v in data.items() if k not in cls.LEGACY_KEYS}
-        if "trade_size_usd" in data and data["trade_size_usd"] is None:
-            # Older configs used null for "size by risk % of capital"; fall back to the default.
-            data = {k: v for k, v in data.items() if k != "trade_size_usd"}
+        if "min_order_notional_usd" in data and data["min_order_notional_usd"] is None:
+            # Older configs used null for "share minimums"; shares are no longer used for BUYs.
+            data = {k: v for k, v in data.items() if k != "min_order_notional_usd"}
         modes = data.get("feature_modes")
         if isinstance(modes, dict) and cls.LEGACY_FEATURES & modes.keys():
             data = {**data, "feature_modes": {k: v for k, v in modes.items() if k not in cls.LEGACY_FEATURES}}

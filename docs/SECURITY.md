@@ -81,7 +81,7 @@ before signing anything.
   methodology, unknown source, unknown tie rule, or low rule confidence means NO TRADE.
 - Rule fingerprints must be approved by the operator when `require_rules_approval` is true.
 - Write-ahead order journal; `UNKNOWN` exchange outcomes are never blindly retried.
-- Exits are market (FOK) SELLs with no minimum share size; a position is only held to resolution if the book has no bids.
+- Exits sell every share held as a market (FAK) SELL with no minimum share size; a position is only held to resolution if the book has no bids.
 - Startup recovery uses the exchange as the source of truth and blocks on ambiguity.
 
 ## Heartbeat

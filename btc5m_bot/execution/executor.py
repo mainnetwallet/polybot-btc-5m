@@ -85,8 +85,13 @@ class ExecutionEngine:
     ) -> ExecutionOutcome:
         mode = self.mode_provider()
         schedule = FeeSchedule.from_market(market)
-        buy_notional = intent.usdc_amount if intent.usdc_amount is not None else intent.shares * intent.limit_price
-        reserve_amount = buy_notional + taker_fee(intent.shares, intent.limit_price, schedule)
+        if intent.usdc_amount is None or intent.usdc_amount <= 0:
+            # BUYs are USDC orders. Never fall back to shares x price.
+            return ExecutionOutcome(
+                OrderResult(intent.client_order_id, OrderStatus.REJECTED, error_code="NO_USDC_AMOUNT", error_message="BUY requires a USDC amount"),
+                note="no trade: USDC amount not set",
+            )
+        reserve_amount = intent.usdc_amount + taker_fee(intent.shares, intent.limit_price, schedule)
         try:
             self.journal.persist_intent(intent, reserve_amount=reserve_amount)
         except Exception as exc:

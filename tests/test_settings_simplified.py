@@ -96,15 +96,17 @@ def _advice(trade):
     return trade_size_advice(trade_size_usd=Decimal(trade))
 
 
-def test_default_trade_size_is_flagged_as_unable_to_reach_the_minimum():
+def test_unset_trade_size_is_flagged_as_no_trading():
     advice = trade_size_advice(trade_size_usd=RuntimeConfig().trade_size_usd)
     assert advice["ok"] is False
-    assert "5" in advice["message"]
+    assert "not set" in advice["message"]
 
 
-@pytest.mark.parametrize("trade", ["3", "5", "20"])
-def test_workable_trade_sizes_pass(trade):
-    assert _advice(trade)["ok"] is True
+def test_below_dollar_minimum_is_flagged_and_workable_sizes_pass():
+    low = trade_size_advice(trade_size_usd=Decimal("0.50"))
+    assert low["ok"] is False and "$1" in low["message"]
+    for trade in ("1", "3", "5", "20"):
+        assert trade_size_advice(trade_size_usd=Decimal(trade))["ok"] is True
 
 
 def test_config_api_returns_the_advice(client):  # noqa: F811

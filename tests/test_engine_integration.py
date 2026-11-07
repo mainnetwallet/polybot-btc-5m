@@ -518,3 +518,46 @@ def test_duplicate_exit_order_is_recorded_not_swallowed(settings, repo, adapter,
 
     events = {e.event_type for e in repo.recent_protection_events(limit=25)}
     assert "EXIT_DUPLICATE_ORDER" in events
+
+
+def test_usdc_buy_then_market_sell_of_every_share_end_to_end(settings, repo, adapter, config_store):
+    """$1 USDC buy (about 1.67 shares, far below any 5-share minimum) -> stop-loss -> whole position
+    market-sold as FAK at the lowest tick, even into a thin book. Real sizing, executor and exit
+    manager; only the exchange is the paper broker."""
+    from btc5m_bot.sizing import size_position
+    from btc5m_bot.exchange.fees import FeeSchedule
+
+    clock = FixedClock(START)
+    engine, market, _ = _build(settings, repo, adapter, config_store, clock)
+    asyncio.run(engine._iteration())
+    up = market.asset_id(Outcome.UP)
+
+    # ---- BUY: sized and sent purely in USDC ----
+    adapter.set_book(up, bids=[("0.58", "1000")], asks=[("0.60", "1000")], timestamp=START)
+    book = asyncio.run(adapter.get_order_book(up))
+    sizing = size_position(
+        trade_size_usd=Decimal("1"), balance=Decimal("100"), book=book,
+        schedule=FeeSchedule.from_market(market),
+    )
+    assert sizing.allowed, sizing.detail
+    intent = engine.journal.new_intent(
+        market=market, outcome=Outcome.UP, side=Side.BUY, shares=sizing.shares,
+        limit_price=Decimal("0.61"), order_type="FOK", mode="PAPER", usdc_amount=Decimal("1"),
+    )
+    entry = asyncio.run(engine.execution.execute_entry(intent, market, book))
+    assert entry.result.filled_shares == Decimal("1.6666")  # $1 / 0.60, no share minimum applied
+    position = repo.get_position(market.market_id, "PAPER")
+    assert position is not None and position.shares == Decimal("1.6666")
+
+    # ---- SELL: price collapses into a thin book; everything held is market-sold ----
+    adapter.set_book(up, bids=[("0.20", "0.5"), ("0.10", "5")], asks=[("0.25", "100")], timestamp=START)
+    clock.advance(5)
+    engine.exits.dirty = True
+    asyncio.run(engine._manage_position(clock.now()))
+
+    sells = [o for o in repo.list_orders(mode="PAPER", limit=50) if o.side == "SELL"]
+    assert len(sells) == 1
+    assert sells[0].order_type == "FAK"
+    assert Decimal(sells[0].shares) == Decimal("1.6666")  # every share held
+    assert Decimal(sells[0].price) == market.tick_size  # market: no price floor above the lowest tick
+    assert repo.get_position(market.market_id, "PAPER").status == "CLOSED"

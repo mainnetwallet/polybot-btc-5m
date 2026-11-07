@@ -115,7 +115,8 @@ if one is missing):
 | `NEGATIVE_EV` | the trade loses money in expectation after fees, slippage and the fee buffer |
 | `INSUFFICIENT_EDGE` | expected value is positive but the net edge is below `min_net_edge` |
 | `FEES_UNVERIFIED` | the market metadata has no fee schedule, so costs cannot be computed |
-| `BELOW_MIN_ORDER` | the trade size is below the exchange minimum; never upsized |
+| `BELOW_MIN_ORDER` | the trade size is below the minimum order value (default $1); never upsized |
+| `TRADE_SIZE_NOT_SET` | no USDC trade size is set, so the bot places no trades; set it in Settings |
 | `RISK_LIMIT` | planned loss is not positive, or an unresolved working order exists |
 | `INSUFFICIENT_BALANCE` | balance unavailable, or the planned cost exceeds the available balance |
 | `LATENCY_BREACH` | signal-to-order or order-to-result latency p95 is above `max_latency_p95_ms` |
@@ -148,8 +149,8 @@ if one is missing):
    ```bat
    .venv\Scripts\python.exe -m btc5m_bot approve-rule <fingerprint>
    ```
-4. Set `trade_size_usd` in the dashboard or `config\runtime.json` (about $3 or more, so the 5-share
-   exchange minimum fits). The daily loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
+4. Set `trade_size_usd` (USDC per buy, minimum $1) in the dashboard or `config\runtime.json`. It has no
+   default: until it is set the bot places no trades (`TRADE_SIZE_NOT_SET`). The daily loss cap is a fixed USDC amount (`daily_loss_limit_usd`).
 5. Do not judge the strategy from a handful of trades. The statistical validation gate
    requires real recorded outcomes; it fails honestly on an empty database.
 

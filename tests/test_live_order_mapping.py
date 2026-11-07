@@ -27,6 +27,7 @@ def _intent(journal: OrderJournal, market, *, side: Side, shares: str = "10", or
         limit_price=Decimal("0.51"),
         order_type=order_type,
         mode="LIVE",
+        usdc_amount=Decimal(shares) * Decimal("0.51") if side is Side.BUY else None,
     )
 
 
